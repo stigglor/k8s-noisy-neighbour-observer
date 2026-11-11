@@ -53,14 +53,17 @@ async fn version() -> Json<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::metrics::Metrics;
     use axum::body::Body;
     use axum::http::Request;
     use http_body_util::BodyExt;
+    use std::time::Duration;
     use tower::ServiceExt;
 
     fn state() -> Arc<AppState> {
+        let metrics = Metrics::new(&[Duration::from_millis(1)]);
         Arc::new(AppState {
-            registry: crate::metrics::registry(),
+            registry: crate::metrics::registry(&metrics),
         })
     }
 

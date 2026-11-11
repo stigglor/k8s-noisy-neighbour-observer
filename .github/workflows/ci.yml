@@ -19,17 +19,94 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Same toolchain as the Dockerfile builder and rust-version, so a new stable lint cannot break CI.
-      - name: Install Rust (1.94, with clippy and rustfmt)
+      - name: Install Rust (1.99, with clippy and rustfmt)
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
-          toolchain: "1.94"
+          toolchain: "1.99"
           components: clippy, rustfmt
+
+      - name: Install the eBPF toolchain
+        run: make ebpf-toolchain
 
       - name: Cache cargo registry and target
         uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
 
       - name: make ci
         run: make ci
+
+  # Loads the probes into the runner kernel and checks that a hog raises the victim's wait.
+  integration:
+    name: integration (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust (1.99)
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: "1.99"
+
+      - name: Install the eBPF toolchain
+        run: make ebpf-toolchain
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+
+      - name: make integration
+        run: make integration
+
+  # The same test on the oldest supported kernel and the LTS kernels after it, in a VM.
+  kernels:
+    name: integration (kernel ${{ matrix.kernel }})
+    strategy:
+      fail-fast: false
+      matrix:
+        kernel: ["6.1-20261021.083220", "6.6-20261021.083220", "6.12-20261021.083220"]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust (1.99)
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: "1.99"
+
+      - name: Install the eBPF toolchain
+        run: make ebpf-toolchain
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+
+      # The VM mounts the checkout at /host, so the test binary goes there.
+      - name: Build the integration test
+        run: |
+          bin=$(cargo test --locked -p observer --test runqueue --no-run --message-format=json \
+            | jq -r 'select(.profile.test and .target.name == "runqueue") | .executable')
+          cp "$bin" runqueue-test
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run the test in the VM
+        uses: cilium/little-vm-helper@c8b0bfbae3bdda7bc69fb9cd370e4b74ce84986d # v0.0.33
+        with:
+          test-name: runqueue
+          image-version: ${{ matrix.kernel }}
+          host-mount: ./
+          cpu: 2
+          mem: 4G
+          install-dependencies: true
+          cmd: /host/runqueue-test --ignored --nocapture
 
   # Builds the image for both platforms without pushing, so a broken Dockerfile fails the PR.
   image:

@@ -20,21 +20,36 @@ build: ## cargo build --release
 run: ## Run the agent locally
 	cargo run
 
+# The eBPF crate only builds for the BPF target, with the nightly that the script pins.
+EBPF_TOOLCHAIN = $(shell sed -n 's/^NIGHTLY=//p' scripts/install-ebpf-toolchain.sh)
+
 .PHONY: test
 test: ## Run all tests
-	cargo test --workspace --locked
+	cargo test --locked
 
 .PHONY: lint
 lint: ## clippy (deny warnings) + rustfmt check
-	cargo clippy --workspace --all-targets --locked -- -D warnings
-	cargo fmt --check
+	cargo clippy --all-targets --locked -- -D warnings
+	cargo +$(EBPF_TOOLCHAIN) clippy -p observer-ebpf --target bpfel-unknown-none -Z build-std=core --locked -- -D warnings
+	cargo fmt --all --check
 
 .PHONY: fmt
 fmt: ## Apply rustfmt
-	cargo fmt
+	cargo fmt --all
 
 .PHONY: ci
 ci: lint test ## What CI runs
+
+# Runs the test binary through sudo, unless make already runs as root.
+SUDO_RUNNER = $(if $(filter 0,$(shell id -u)),,CARGO_TARGET_$(shell rustc -vV | sed -n 's/^host: //p' | tr 'a-z-' 'A-Z_')_RUNNER="sudo -E")
+
+.PHONY: integration
+integration: ## Run the eBPF integration test (Linux, as root through sudo)
+	$(SUDO_RUNNER) cargo test --locked -p observer --test runqueue -- --ignored --nocapture
+
+.PHONY: ebpf-toolchain
+ebpf-toolchain: ## Install the pinned nightly and the prebuilt bpf-linker that build the eBPF object
+	scripts/install-ebpf-toolchain.sh
 
 .PHONY: docker-build
 docker-build: ## Build the container image for one platform ($(IMAGE)); override PLATFORM=linux/amd64

@@ -1,0 +1,14 @@
+[package]
+name = "observer-ebpf"
+version = "0.1.0"
+edition = "2021"
+description = "eBPF programs that measure run queue latency per cgroup"
+license = "Proprietary"
+
+[dependencies]
+aya-ebpf = "=0.3.0"
+observer-common = { path = "../observer-common" }
+
+[[bin]]
+name = "observer"
+path = "src/main.rs"
