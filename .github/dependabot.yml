@@ -1,0 +1,37 @@
+version: 2
+
+updates:
+  # Keep the SHA pinned GitHub Actions current. Dependabot bumps the pinned SHA
+  # and updates the `# vX` comment when the upstream tag moves.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
+      include: scope
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: build
+      include: scope
+    open-pull-requests-limit: 10
+    groups:
+      # One PR for routine patch and minor bumps. Majors stay separate for review.
+      cargo-minor:
+        update-types: ["minor", "patch"]
+
+  # Bumps the digest pins of the base images in the Dockerfile.
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: build
+      include: scope
