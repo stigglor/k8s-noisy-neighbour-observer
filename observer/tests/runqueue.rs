@@ -6,15 +6,17 @@
 
 #![cfg(target_os = "linux")]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::time::{Duration, Instant};
 
 use observer::bpf::Probes;
-use observer::config::Config;
-use observer::runq::Accumulator;
+use observer::cardinality::Cardinality;
+use observer::cgroup::{self, Resolver};
+use observer::config::{Config, Granularity};
+use observer::runq::{Accumulator, Owner};
 use observer_common::RunqHist;
 
 const ROLE: &str = "NNO_TEST_ROLE";
@@ -26,23 +28,44 @@ const WINDOW: Duration = Duration::from_secs(3);
 #[test]
 #[ignore = "needs Linux, root, BTF and cgroup v2: run make integration"]
 fn victim_waits_longer_under_a_hog() {
-    let probes = Probes::load(&Config::from_env().unwrap()).expect("load and attach");
-    let mut accumulator = Accumulator::default();
-    let mut read = || {
-        let read = probes.read_runq().unwrap();
-        accumulator.update(read.clone());
-        (read, accumulator.node())
-    };
     let cpu = last_allowed_cpu();
     let victim_cgroup = Cgroup::create("victim");
     let hog_cgroup = Cgroup::create("hog");
     let victim_id = victim_cgroup.id();
+    let config = Config::from_env().unwrap();
+    let probes = Probes::load(&config).expect("load and attach");
+    let cardinality = Cardinality::new(config.series_budget, config.series_per_entity());
+    let mut accumulator = Accumulator::new(Granularity::Workload, cardinality);
+    let mut resolver = Resolver::new(&config.cgroup_root);
+    let mut read = || {
+        let read = probes.read_runq().unwrap();
+        resolver.refresh(read.keys().copied()).unwrap();
+        // No pod watch here, so only the cgroups outside pods resolve.
+        let resolve = |id| match resolver.get(id) {
+            Some(cgroup::Cgroup::System) => Owner::System,
+            _ => Owner::Unresolved(None),
+        };
+        accumulator.update(read.clone(), resolve, &HashSet::new());
+        let mut node = RunqHist::default();
+        for (_, hist) in accumulator.snapshot() {
+            node.bins
+                .iter_mut()
+                .zip(hist.bins)
+                .for_each(|(n, c)| *n += c);
+        }
+        (read, node, resolver.get(victim_id).cloned())
+    };
 
     let _victim = Workload::spawn("victim", &victim_cgroup, cpu);
     std::thread::sleep(Duration::from_secs(1));
-    let (start, node_start) = read();
+    let (start, node_start, _) = read();
     std::thread::sleep(WINDOW);
-    let (end, node_mid) = read();
+    let (end, node_mid, victim) = read();
+    assert_eq!(
+        victim,
+        Some(cgroup::Cgroup::System),
+        "a cgroup outside a pod"
+    );
     assert!(
         end.contains_key(&victim_id),
         "no RUNQ entry for the victim cgroup id {victim_id} (inode of {:?})",
@@ -52,9 +75,9 @@ fn victim_waits_longer_under_a_hog() {
 
     let _hog = Workload::spawn("hog", &hog_cgroup, cpu);
     std::thread::sleep(Duration::from_secs(1));
-    let (start, _) = read();
+    let (start, _, _) = read();
     std::thread::sleep(WINDOW);
-    let (end, node_end) = read();
+    let (end, node_end, _) = read();
     let contended = mean(&start, &end, victim_id);
 
     println!("victim mean wait: baseline {baseline:?}, under the hog {contended:?}");

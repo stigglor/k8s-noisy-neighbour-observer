@@ -1,6 +1,7 @@
 //! Process config from `NNO_*` environment variables.
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{bail, Context};
@@ -10,6 +11,16 @@ const DEFAULT_BIND_ADDR: &str = "[::]:9400";
 const DEFAULT_READ_INTERVAL: &str = "5s";
 const DEFAULT_MAX_CGROUPS: &str = "1024";
 const DEFAULT_HISTOGRAM_BOUNDS: &str = "10us,100us,500us,1ms,5ms,10ms,100ms,1s";
+const DEFAULT_CGROUP_ROOT: &str = "/sys/fs/cgroup";
+const DEFAULT_SERIES_BUDGET: &str = "1500";
+
+/// The labels that name an entity, the unit that gets its own series.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Granularity {
+    Workload,
+    Pod,
+    Container,
+}
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -19,6 +30,19 @@ pub struct Config {
     pub max_cgroups: u32,
     /// Strictly increasing, at most `MAX_BOUNDS`.
     pub histogram_bounds: Vec<Duration>,
+    /// The node whose pods the agent watches. The probes need it, so only Linux requires it.
+    pub node_name: Option<String>,
+    pub cgroup_root: PathBuf,
+    pub granularity: Granularity,
+    /// The most per entity series the agent exports.
+    pub series_budget: usize,
+}
+
+impl Config {
+    /// Series of one entity in the latency histogram: the buckets with `+Inf`, sum and count.
+    pub fn series_per_entity(&self) -> usize {
+        self.histogram_bounds.len() + 3
+    }
 }
 
 impl Config {
@@ -54,12 +78,38 @@ impl Config {
         let histogram_bounds = parse_bounds(&raw)
             .with_context(|| format!("NNO_HISTOGRAM_BOUNDS is invalid: {raw}"))?;
 
-        Ok(Self {
+        let node_name = get("NNO_NODE_NAME").filter(|name| !name.is_empty());
+        let cgroup_root = PathBuf::from(var("NNO_CGROUP_ROOT", DEFAULT_CGROUP_ROOT));
+
+        let raw = var("NNO_GRANULARITY", "workload");
+        let granularity = match raw.as_str() {
+            "workload" => Granularity::Workload,
+            "pod" => Granularity::Pod,
+            "container" => Granularity::Container,
+            _ => bail!("NNO_GRANULARITY must be workload, pod or container: {raw}"),
+        };
+
+        let raw = var("NNO_SERIES_BUDGET", DEFAULT_SERIES_BUDGET);
+        let series_budget: usize = raw
+            .parse()
+            .with_context(|| format!("NNO_SERIES_BUDGET is not a number: {raw}"))?;
+
+        let config = Self {
             bind_addr,
             read_interval,
             max_cgroups,
             histogram_bounds,
-        })
+            node_name,
+            cgroup_root,
+            granularity,
+            series_budget,
+        };
+        // The _system and _overflow entities always hold their series.
+        let reserved = 2 * config.series_per_entity();
+        if config.series_budget < reserved {
+            bail!("NNO_SERIES_BUDGET must be at least {reserved} for these histogram bounds");
+        }
+        Ok(config)
     }
 }
 
@@ -119,6 +169,11 @@ mod tests {
         assert_eq!(config.histogram_bounds.len(), 8);
         assert_eq!(config.histogram_bounds[0], Duration::from_micros(10));
         assert_eq!(config.histogram_bounds[7], Duration::from_secs(1));
+        assert_eq!(config.node_name, None);
+        assert_eq!(config.cgroup_root, PathBuf::from("/sys/fs/cgroup"));
+        assert_eq!(config.granularity, Granularity::Workload);
+        assert_eq!(config.series_budget, 1500);
+        assert_eq!(config.series_per_entity(), 11);
     }
 
     #[test]
@@ -128,6 +183,10 @@ mod tests {
             ("NNO_READ_INTERVAL", "250ms"),
             ("NNO_MAX_CGROUPS", "64"),
             ("NNO_HISTOGRAM_BOUNDS", "500ns, 2us,1ms"),
+            ("NNO_NODE_NAME", "node-a"),
+            ("NNO_CGROUP_ROOT", "/host/sys/fs/cgroup"),
+            ("NNO_GRANULARITY", "container"),
+            ("NNO_SERIES_BUDGET", "12"),
         ]))
         .unwrap();
         assert_eq!(config.bind_addr.port(), 8080);
@@ -141,6 +200,38 @@ mod tests {
                 Duration::from_millis(1)
             ]
         );
+        assert_eq!(config.node_name.as_deref(), Some("node-a"));
+        assert_eq!(config.cgroup_root, PathBuf::from("/host/sys/fs/cgroup"));
+        assert_eq!(config.granularity, Granularity::Container);
+        assert_eq!(config.series_budget, 12);
+    }
+
+    #[test]
+    fn empty_node_name_is_unset() {
+        let config = Config::from_lookup(lookup(&[("NNO_NODE_NAME", "")])).unwrap();
+        assert_eq!(config.node_name, None);
+    }
+
+    #[test]
+    fn granularity_values() {
+        for (raw, granularity) in [
+            ("workload", Granularity::Workload),
+            ("pod", Granularity::Pod),
+            ("container", Granularity::Container),
+        ] {
+            let config = Config::from_lookup(lookup(&[("NNO_GRANULARITY", raw)])).unwrap();
+            assert_eq!(config.granularity, granularity);
+        }
+        assert!(Config::from_lookup(lookup(&[("NNO_GRANULARITY", "node")])).is_err());
+    }
+
+    #[test]
+    fn budget_must_fit_the_reserved_entities() {
+        assert!(Config::from_lookup(lookup(&[("NNO_SERIES_BUDGET", "22")])).is_ok());
+        for raw in ["21", "0", "-1", "many"] {
+            let result = Config::from_lookup(lookup(&[("NNO_SERIES_BUDGET", raw)]));
+            assert!(result.is_err(), "{raw}");
+        }
     }
 
     #[test]

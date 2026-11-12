@@ -21,7 +21,9 @@ async fn main() -> anyhow::Result<()> {
 
     // Attach before the listener binds, so a pod that serves metrics always measures.
     let metrics = Metrics::new(&config.histogram_bounds);
-    probes::start(&config, &metrics).context("starting the eBPF probes")?;
+    probes::start(&config, &metrics)
+        .await
+        .context("starting the eBPF probes")?;
 
     let state = Arc::new(AppState {
         registry: metrics::registry(&metrics),
@@ -43,19 +45,29 @@ async fn main() -> anyhow::Result<()> {
 
 #[cfg(target_os = "linux")]
 mod probes {
+    use std::collections::HashSet;
     use std::sync::Arc;
     use std::time::Duration;
 
     use anyhow::Context;
     use observer::bpf::{self, Probes};
-    use observer::config::Config;
+    use observer::cardinality::Cardinality;
+    use observer::cgroup::Resolver;
+    use observer::config::{Config, Granularity};
+    use observer::k8s::{self, PodIndex, Watch};
     use observer::metrics::{MapLabels, Metrics, RunqueueLatency};
     use observer::runq::Accumulator;
+    use observer::workload::Entity;
     use prometheus_client::metrics::counter::Counter;
     use prometheus_client::metrics::gauge::Gauge;
 
-    /// Loads and attaches the programs, then reads their maps on `NNO_READ_INTERVAL`.
-    pub fn start(config: &Config, metrics: &Metrics) -> anyhow::Result<()> {
+    /// Loads and attaches the programs, starts the pod watch, then reads the maps on
+    /// `NNO_READ_INTERVAL`.
+    pub async fn start(config: &Config, metrics: &Metrics) -> anyhow::Result<()> {
+        let node = config
+            .node_name
+            .as_deref()
+            .context("NNO_NODE_NAME must name the node of the agent")?;
         let probes = Probes::load(config)?;
         for (name, map) in bpf::MAPS {
             let bytes = probes.map_bytes(name)?;
@@ -65,6 +77,12 @@ mod probes {
                 .set(bytes as i64);
         }
         tracing::info!("eBPF programs attached");
+        let watch = k8s::watch(node).await?;
+        tracing::info!(node, pods = watch.store.len(), "pod watch synced");
+        let mut resolver = Resolver::new(&config.cgroup_root);
+        resolver.scan()?;
+        metrics.series_budget.set(config.series_budget as i64);
+        let cardinality = Cardinality::new(config.series_budget, config.series_per_entity());
         let reader = Reader {
             latency: metrics.runqueue_latency.clone(),
             runq_entries: metrics
@@ -73,7 +91,14 @@ mod probes {
                 .clone(),
             dropped: metrics.dropped_samples.clone(),
             dropped_seen: 0,
-            accumulator: Accumulator::default(),
+            accumulator: Accumulator::new(config.granularity, cardinality),
+            resolver,
+            watch,
+            index: None,
+            granularity: config.granularity,
+            series: metrics.series.clone(),
+            overflow_workloads: metrics.overflow_workloads.clone(),
+            unresolved_cgroups: metrics.unresolved_cgroups.clone(),
         };
         let interval = config.read_interval;
         // The map reads are blocking syscalls, so they run on their own thread and never stall
@@ -91,6 +116,14 @@ mod probes {
         dropped: Counter,
         dropped_seen: u64,
         accumulator: Accumulator,
+        resolver: Resolver,
+        watch: Watch,
+        /// The pod index, the live entities, and the watch generation they came from.
+        index: Option<(u64, PodIndex, HashSet<Entity>)>,
+        granularity: Granularity,
+        series: Gauge,
+        overflow_workloads: Gauge,
+        unresolved_cgroups: Gauge,
     }
 
     impl Reader {
@@ -101,14 +134,41 @@ mod probes {
                 if let Err(error) = self.read_once(&mut probes) {
                     tracing::error!(error = format!("{error:#}"), "reading the BPF maps failed");
                 }
-                self.latency.set(self.accumulator.node());
+                self.latency.set(self.accumulator.snapshot());
+                let cardinality = self.accumulator.cardinality();
+                self.series.set(cardinality.series() as i64);
+                self.overflow_workloads.set(cardinality.overflowed() as i64);
+                self.unresolved_cgroups
+                    .set(self.accumulator.unresolved() as i64);
             }
         }
 
         fn read_once(&mut self, probes: &mut Probes) -> anyhow::Result<()> {
             let runq = probes.read_runq()?;
             self.runq_entries.set(runq.len() as i64);
-            let idle = self.accumulator.update(runq);
+            if let Err(error) = self.resolver.refresh(runq.keys().copied()) {
+                tracing::warn!(
+                    error = format!("{error:#}"),
+                    "scanning the cgroup tree failed"
+                );
+            }
+            let generation = self.watch.generation();
+            if self
+                .index
+                .as_ref()
+                .is_none_or(|(seen, _, _)| *seen != generation)
+            {
+                let pods = self.watch.store.state();
+                let index = PodIndex::new(self.granularity, pods.iter().map(|pod| pod.as_ref()));
+                let live = index.live();
+                self.index = Some((generation, index, live));
+            }
+            let Some((_, index, live)) = &self.index else {
+                return Ok(());
+            };
+            let resolver = &self.resolver;
+            let resolve = |cgroup_id| index.owner(resolver.get(cgroup_id));
+            let idle = self.accumulator.update(runq, resolve, live);
             probes.delete_runq(&idle)?;
             let dropped = probes.read_dropped()?;
             self.dropped
@@ -124,7 +184,7 @@ mod probes {
     use observer::config::Config;
     use observer::metrics::Metrics;
 
-    pub fn start(_: &Config, _: &Metrics) -> anyhow::Result<()> {
+    pub async fn start(_: &Config, _: &Metrics) -> anyhow::Result<()> {
         anyhow::bail!("the eBPF probes need Linux")
     }
 }
