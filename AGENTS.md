@@ -40,7 +40,11 @@ observer/                 # agent library and binary (noisy-neighbour-observer)
   src/config.rs           # NNO_* environment config
   src/offsets.rs          # kernel struct offsets from vmlinux BTF
   src/bpf.rs              # load, attach and read the BPF maps (Linux only)
-  src/runq.rs             # monotonic totals from map reads
+  src/cgroup.rs           # cgroup id to pod UID and container id, from the cgroup tree
+  src/k8s.rs              # pod watch on the node, and the join of cgroups to entities
+  src/workload.rs         # workload of a pod from its owner reference, and the entity labels
+  src/cardinality.rs      # series budget and the sticky _overflow assignment
+  src/runq.rs             # monotonic totals for each entity from map reads
   src/telemetry.rs        # JSON logs
   src/metrics.rs          # Prometheus registry and the histogram collector
   src/routes.rs           # /metrics, /healthz, /version
@@ -52,6 +56,8 @@ Dockerfile                # static musl image on distroless
 ## Invariants
 
 - Cardinality comes first. Every new metric and label needs the review in `CLAUDE.md`.
+- Never move an entity between label sets. A move makes a counter fall.
+- Synthetic label values (`_system`, `_overflow`, `_pod`) start with `_`, which no Kubernetes name can.
 - Config comes from `NNO_*` environment variables. An invalid value must stop the agent at startup.
 - The agent attaches the probes before it binds the listener. A failure must stop the agent with a non-zero exit.
 - `NIGHTLY` in `scripts/install-ebpf-toolchain.sh` is the only nightly pin. `observer/build.rs` and the `Makefile` read it.
