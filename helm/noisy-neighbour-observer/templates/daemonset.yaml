@@ -1,0 +1,156 @@
+{{- include "noisy-neighbour-observer.validate" . -}}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "noisy-neighbour-observer.fullname" . }}
+  labels:
+    {{- include "noisy-neighbour-observer.labels" . | nindent 4 }}
+spec:
+  updateStrategy:
+    {{- toYaml .Values.updateStrategy | nindent 4 }}
+  selector:
+    matchLabels:
+      {{- include "noisy-neighbour-observer.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      # Merged as maps, so a user key replaces a chart key and never renders twice.
+      labels:
+        {{- $labels := include "noisy-neighbour-observer.labels" . | fromYaml }}
+        {{- range $key, $value := mustMergeOverwrite $labels (.Values.podLabels | default dict) }}
+        {{ $key }}: {{ $value | toString | quote }}
+        {{- end }}
+      {{- $annotations := dict }}
+      {{- if .Values.prometheusAnnotations }}
+      {{- $_ := set $annotations "prometheus.io/scrape" "true" }}
+      {{- $_ := set $annotations "prometheus.io/port" (int64 .Values.port | toString) }}
+      {{- $_ := set $annotations "prometheus.io/path" "/metrics" }}
+      {{- end }}
+      {{- with mustMergeOverwrite $annotations (.Values.podAnnotations | default dict) }}
+      annotations:
+        {{- range $key, $value := . }}
+        {{ $key }}: {{ $value | toString | quote }}
+        {{- end }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "noisy-neighbour-observer.serviceAccountName" . }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      containers:
+        - name: agent
+          image: {{ include "noisy-neighbour-observer.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            # Root, because Kubernetes gives added capabilities no effect for a non-root user.
+            runAsUser: 0
+            runAsNonRoot: false
+            privileged: {{ .Values.privileged }}
+            {{- if not .Values.privileged }}
+            allowPrivilegeEscalation: false
+            {{- end }}
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+              add:
+                - BPF
+                - PERFMON
+                {{- range .Values.extraCapabilities }}
+                - {{ . }}
+                {{- end }}
+            seccompProfile:
+              type: RuntimeDefault
+            {{- with .Values.seLinux.type }}
+            seLinuxOptions:
+              type: {{ . }}
+            {{- end }}
+            {{- if .Values.appArmor.unconfined }}
+            appArmorProfile:
+              type: Unconfined
+            {{- end }}
+          ports:
+            - name: metrics
+              containerPort: {{ int64 .Values.port }}
+              protocol: TCP
+          env:
+            - name: NNO_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: NNO_CGROUP_ROOT
+              value: /host/sys/fs/cgroup
+            - name: NNO_BIND_ADDR
+              value: "{{ .Values.bindHost }}:{{ int64 .Values.port }}"
+            - name: NNO_GRANULARITY
+              value: {{ .Values.config.granularity | quote }}
+            - name: NNO_HISTOGRAM_BOUNDS
+              value: {{ join "," .Values.config.histogramBounds | quote }}
+            # A values file gives numbers as floats, and large floats render as 1e+06.
+            - name: NNO_SERIES_BUDGET
+              value: {{ int64 .Values.config.seriesBudget | quote }}
+            - name: NNO_READ_INTERVAL
+              value: {{ .Values.config.readInterval | quote }}
+            - name: NNO_MAX_CGROUPS
+              value: {{ int64 .Values.config.maxCgroups | quote }}
+            - name: RUST_LOG
+              value: {{ .Values.config.logLevel | quote }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          startupProbe:
+            {{- toYaml .Values.startupProbe | nindent 12 }}
+          livenessProbe:
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: cgroup
+              mountPath: /host/sys/fs/cgroup
+              readOnly: true
+      # The cgroup namespace of the container hides the other pods, so the agent reads the host tree.
+      volumes:
+        - name: cgroup
+          hostPath:
+            path: /sys/fs/cgroup
+            type: Directory
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              # One term, so the extra expressions narrow the defaults and cannot replace them.
+              - matchExpressions:
+                  - key: kubernetes.io/os
+                    operator: In
+                    values: [linux]
+                  # Fargate nodes carry a taint that the default toleration accepts.
+                  - key: eks.amazonaws.com/compute-type
+                    operator: NotIn
+                    values: [fargate]
+                  - key: type
+                    operator: NotIn
+                    values: [virtual-kubelet]
+                  {{- with .Values.extraNodeAffinityExpressions }}
+                  {{- toYaml . | nindent 18 }}
+                  {{- end }}
+        {{- with .Values.affinity }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

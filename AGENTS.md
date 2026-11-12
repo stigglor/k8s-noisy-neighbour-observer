@@ -26,6 +26,9 @@ The `Makefile` is the source of truth for which checks must pass.
 | `make build` / `make run` | Build in release mode, or run the agent locally |
 | `make docker-build` | Build the image for one platform (`PLATFORM=` `IMAGE=`) |
 | `make preflight` | Check that the docker engine kernel has BTF and cgroup v2 |
+| `make helm-validate` | Lint the chart and validate each rendered scenario (kubeconform when installed) |
+| `make helm-version-check` | Require a chart version bump when the chart changes (`BASE=origin/main`) |
+| `make kind-up` / `make kind-test` / `make kind-down` | Install the chart in a two node kind cluster, run the e2e assertions, delete the cluster |
 
 ## Repository map
 
@@ -49,7 +52,9 @@ observer/                 # agent library and binary (noisy-neighbour-observer)
   src/metrics.rs          # Prometheus registry and the histogram collector
   src/routes.rs           # /metrics, /healthz, /version
   tests/runqueue.rs       # integration test, ignored by default
-scripts/                  # install-ebpf-toolchain.sh
+helm/noisy-neighbour-observer/  # DaemonSet chart
+deploy/local/             # kind cluster config and CPU bound workloads for the e2e test
+scripts/                  # install-ebpf-toolchain.sh, helm-validate.sh, helm-version-check.sh, kind-local.sh
 Dockerfile                # static musl image on distroless
 ```
 

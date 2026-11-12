@@ -1,0 +1,18 @@
+# kind cluster for the e2e test. The worker carries a NoSchedule taint in place of a dedicated
+# node pool, so the test proves that the agent reaches a tainted pool with the default values.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: nno-local
+nodes:
+  - role: control-plane
+  - role: worker
+    labels:
+      pool: dedicated
+    kubeadmConfigPatches:
+      - |
+        kind: JoinConfiguration
+        nodeRegistration:
+          taints:
+            - key: dedicated
+              value: e2e
+              effect: NoSchedule

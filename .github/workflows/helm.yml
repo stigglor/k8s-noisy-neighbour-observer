@@ -1,0 +1,66 @@
+name: helm
+
+# Runs only when the chart, its scripts or this workflow change.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "helm/**"
+      - "scripts/helm-validate.sh"
+      - "scripts/helm-version-check.sh"
+      - ".github/workflows/helm.yml"
+  pull_request:
+    paths:
+      - "helm/**"
+      - "scripts/helm-validate.sh"
+      - "scripts/helm-version-check.sh"
+      - ".github/workflows/helm.yml"
+
+# Least privilege: the job only reads the repo.
+permissions:
+  contents: read
+
+env:
+  # Pinned kubeconform release and the sha256 of its linux-amd64 archive.
+  # Pinned helm, so the schema error text that helm-validate.sh matches stays the same.
+  HELM_VERSION: v4.2.0
+  HELM_SHA256: 97dbeb971be4ac4b27e3839976d9564c0fb35c6f3b1da89dd1e292d236af4096
+  KUBECONFORM_VERSION: v0.8.0
+  KUBECONFORM_SHA256: 9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883
+
+jobs:
+  validate:
+    name: lint, template, validate
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history, so the version check can diff against the base branch.
+          fetch-depth: 0
+
+      - name: Install helm (${{ env.HELM_VERSION }})
+        run: |
+          curl -fsSLo helm.tar.gz "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz"
+          echo "${HELM_SHA256}  helm.tar.gz" | sha256sum -c -
+          tar -xzf helm.tar.gz linux-amd64/helm
+          sudo install -m 0755 linux-amd64/helm /usr/local/bin/helm
+          helm version
+
+      - name: Install kubeconform (${{ env.KUBECONFORM_VERSION }})
+        run: |
+          curl -fsSLo kubeconform.tar.gz \
+            "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          echo "${KUBECONFORM_SHA256}  kubeconform.tar.gz" | sha256sum -c -
+          tar -xzf kubeconform.tar.gz kubeconform
+          sudo install -m 0755 kubeconform /usr/local/bin/kubeconform
+          kubeconform -v
+
+      - name: make helm-validate
+        run: make helm-validate
+
+      # BASE is the base branch of the PR, not the local default origin/main.
+      - name: make helm-version-check
+        if: github.event_name == 'pull_request'
+        env:
+          BASE: origin/${{ github.base_ref }}
+        run: make helm-version-check

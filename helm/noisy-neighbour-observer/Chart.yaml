@@ -1,0 +1,21 @@
+# apiVersion v2 works in Helm 3 and Helm 4, and in ArgoCD and Flux.
+apiVersion: v2
+name: noisy-neighbour-observer
+description: DaemonSet agent that measures the run queue latency of each workload on a node with eBPF.
+type: application
+
+# version: the chart version (SemVer). Bump it on each change to templates or values.
+# appVersion: the agent image tag that the chart deploys when image.tag is empty.
+version: "0.1.0"
+appVersion: "0.1.0"
+# securityContext.appArmorProfile needs 1.30. An older API server drops it without an error.
+kubeVersion: ">=1.30.0-0"
+
+home: https://github.com/stigglor/k8s-noisy-neighbour-observer
+sources:
+  - https://github.com/stigglor/k8s-noisy-neighbour-observer
+keywords:
+  - ebpf
+  - scheduler
+  - noisy-neighbour
+  - prometheus

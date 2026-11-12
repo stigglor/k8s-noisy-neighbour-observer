@@ -1,0 +1,36 @@
+{{- if .Values.podMonitor.enabled -}}
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ include "noisy-neighbour-observer.fullname" . }}
+  labels:
+    {{- include "noisy-neighbour-observer.labels" . | nindent 4 }}
+    {{- with .Values.podMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "noisy-neighbour-observer.selectorLabels" . | nindent 6 }}
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  podMetricsEndpoints:
+    - port: metrics
+      path: /metrics
+      {{- with .Values.podMonitor.interval }}
+      interval: {{ . }}
+      {{- end }}
+      # The agent sets namespace, pod and container on its own series. Without this, the
+      # target labels of the agent pod rename them to exported_*.
+      honorLabels: true
+      # The node name stays the same across agent restarts, and the pod name and IP do not.
+      # The agent pod and container names would otherwise sit on every workload series.
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_pod_node_name]
+          targetLabel: node
+        - sourceLabels: [__meta_kubernetes_pod_node_name]
+          targetLabel: instance
+        - action: labeldrop
+          regex: pod|container
+{{- end }}

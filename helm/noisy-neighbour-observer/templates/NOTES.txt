@@ -1,0 +1,16 @@
+noisy-neighbour-observer {{ .Chart.AppVersion }} deployed as release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+
+The DaemonSet places one agent on each Linux node, in every node pool. Each agent
+serves /metrics on port {{ .Values.port }}. The chart renders no Service.
+
+RBAC:      {{ if .Values.rbac.create }}ClusterRole/{{ include "noisy-neighbour-observer.fullname" . }} bound to ServiceAccount/{{ include "noisy-neighbour-observer.serviceAccountName" . }}{{ else }}not managed here (rbac.create=false). Grant get, list and watch on pods, or each
+           agent exits 60s after it starts.{{ end }}
+Scrape:    {{ if .Values.podMonitor.enabled }}PodMonitor/{{ include "noisy-neighbour-observer.fullname" . }}{{ else if .Values.prometheusAnnotations }}prometheus.io annotations on each pod{{ else }}none. Set podMonitor.enabled or prometheusAnnotations, or add a scrape config.{{ end }}
+{{- if not .Values.podMonitor.enabled }}
+           The scrape config must set honor_labels: true and must relabel
+           __meta_kubernetes_pod_node_name to node and instance.
+{{- end }}
+
+Verify the rollout:
+  kubectl --namespace {{ .Release.Namespace }} rollout status daemonset/{{ include "noisy-neighbour-observer.fullname" . }}
+  kubectl --namespace {{ .Release.Namespace }} logs daemonset/{{ include "noisy-neighbour-observer.fullname" . }}

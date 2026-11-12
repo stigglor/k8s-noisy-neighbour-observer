@@ -1,0 +1,83 @@
+# Two CPU bound workloads for the e2e test, with one replica on each node. The topology spread
+# and the toleration place a replica on the tainted worker and on the control plane.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nno-e2e
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stress
+  namespace: nno-e2e
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: stress
+  template:
+    metadata:
+      labels:
+        app: stress
+    spec:
+      terminationGracePeriodSeconds: 1
+      tolerations:
+        - operator: Exists
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: stress
+          matchLabelKeys:
+            - pod-template-hash
+      containers:
+        - name: stress
+          image: docker.io/colinianking/stress-ng@sha256:291afac4a9f58dc5f82457749542c348c55221a584b75ead24c5380c5f7a1c96
+          args: ["--cpu", "1", "--cpu-load", "50", "--timeout", "0"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 32Mi
+            limits:
+              memory: 64Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spin
+  namespace: nno-e2e
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: spin
+  template:
+    metadata:
+      labels:
+        app: spin
+    spec:
+      terminationGracePeriodSeconds: 1
+      tolerations:
+        - operator: Exists
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: spin
+          matchLabelKeys:
+            - pod-template-hash
+      containers:
+        - name: spin
+          image: docker.io/library/busybox@sha256:a7dbc319b1438115a207e11930dc4bb3e643dcb3ec0bdd694bb36cd8fad289ec
+          command: ["sh", "-c", "while :; do :; done"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 8Mi
+            limits:
+              cpu: 500m
+              memory: 16Mi

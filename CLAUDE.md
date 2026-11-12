@@ -46,7 +46,7 @@ Cardinality is a core goal. Each agent pod must keep a small, bounded and stable
 - Each victim keeps at most K culprit workloads. Other culprits sum into one `_other` series.
 - A hard series budget applies to each agent pod. A workload that does not fit goes to `_overflow` for its whole life on the node, so counters stay monotonic.
 - Histograms are classic, not native. The backend is VictoriaMetrics, which cannot scrape native histograms and converts them to bucket series on ingestion.
-- Target labels are stable. The scrape config relabels the node name to `node` and drops `pod` and `instance`.
+- Target labels are stable. The scrape config relabels the node name to `node` and `instance`, and drops `pod` and `container`.
 - The scrape must set `honor_labels: true`. Kubernetes service discovery adds `namespace`, `pod` and `container` target labels for the agent pod, which would otherwise rename the workload labels to `exported_*`.
 - cAdvisor already exports the CFS throttle counters. The agent does not duplicate them.
 
