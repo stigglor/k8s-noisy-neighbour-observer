@@ -4,3 +4,4 @@ target/
 docs/
 tasks/
 *.md
+.claude/

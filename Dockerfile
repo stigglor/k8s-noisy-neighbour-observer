@@ -1,17 +1,26 @@
 # Static musl binary on distroless, for linux/amd64 and linux/arm64. The builder runs on
 # $BUILDPLATFORM and cross-compiles with cargo-zigbuild, so no QEMU is needed.
 
-# ---- builder ----
-FROM --platform=$BUILDPLATFORM rust:1.99-bookworm@sha256:e6f2cff35d0f309acf8433b4f05878ed77092602c5065cc81801177da0bb3a9c AS builder
+# ---- toolchain ----
+FROM --platform=$BUILDPLATFORM rust:1.99-bookworm@sha256:e6f2cff35d0f309acf8433b4f05878ed77092602c5065cc81801177da0bb3a9c AS toolchain
 
 # Declared before TARGETARCH, so both platform builds share the toolchain layer.
 COPY scripts/install-ebpf-toolchain.sh /usr/local/bin/
 RUN apt-get update \
     && apt-get install -y --no-install-recommends python3-pip zstd \
     && pip3 install --break-system-packages --no-cache-dir cargo-zigbuild ziglang \
+    && cargo install --locked --version 0.1.78 cargo-chef \
     && rm -rf /var/lib/apt/lists/* \
     && install-ebpf-toolchain.sh
 
+# The planner reduces the workspace to its manifests, so the recipe changes only with dependencies.
+FROM toolchain AS planner
+WORKDIR /build
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
+
+# ---- builder ----
+FROM toolchain AS builder
 ARG TARGETARCH
 RUN case "$TARGETARCH" in \
          amd64) echo x86_64-unknown-linux-musl > /rust_target ;; \
@@ -21,15 +30,17 @@ RUN case "$TARGETARCH" in \
     && rustup target add "$(cat /rust_target)"
 
 WORKDIR /build
+# The dependency layer lives in the image cache, so no cache mount: CI restores layers, not mounts.
+# On arm64, jemalloc assumes 64 KiB pages, so it also runs on 64 KiB page kernels.
+COPY --from=planner /build/recipe.json recipe.json
+RUN if [ "$TARGETARCH" = arm64 ]; then export JEMALLOC_SYS_WITH_LG_PAGE=16; fi \
+    && cargo chef cook --locked --release --zigbuild --target "$(cat /rust_target)" \
+       --bin noisy-neighbour-observer
 
 COPY . .
 # The commit served at /version. Declared after COPY so a new sha keeps the toolchain layers cached.
 ARG NNO_GIT_SHA
-# On arm64, jemalloc assumes 64 KiB pages, so it also runs on 64 KiB page kernels. The registry
-# cache serves both platform builds, so cargo must hold a lock to unpack into it.
-RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
-    --mount=type=cache,target=/build/target,id=target-$TARGETARCH \
-    if [ "$TARGETARCH" = arm64 ]; then export JEMALLOC_SYS_WITH_LG_PAGE=16; fi \
+RUN if [ "$TARGETARCH" = arm64 ]; then export JEMALLOC_SYS_WITH_LG_PAGE=16; fi \
     && RUST_TARGET="$(cat /rust_target)" \
     && cargo zigbuild --locked --release --bin noisy-neighbour-observer --target "$RUST_TARGET" \
     && cp "target/$RUST_TARGET/release/noisy-neighbour-observer" /usr/local/bin/noisy-neighbour-observer
