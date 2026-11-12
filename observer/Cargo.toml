@@ -2,9 +2,12 @@
 name = "observer"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.94"
+rust-version = "1.99"
 description = "Per pod run queue latency and noisy neighbour metrics for Kubernetes nodes"
 license = "Proprietary"
+
+[lib]
+path = "src/lib.rs"
 
 [[bin]]
 name = "noisy-neighbour-observer"
@@ -13,16 +16,29 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1"
 axum = "0.8"
+btf-rs = { version = "2", default-features = false }
+observer-common = { path = "../observer-common", features = ["user"] }
 prometheus-client = "0.24"
 serde_json = "1"
-tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal"] }
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "time"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
-# Replaces the system allocator, see the global_allocator in src/main.rs.
+# aya only builds on Linux. jemalloc replaces the system allocator, see src/main.rs.
 [target.'cfg(target_os = "linux")'.dependencies]
+aya = { version = "=0.16.0", default-features = false }
 tikv-jemallocator = "0.7"
+
+[build-dependencies]
+anyhow = "1"
+aya-build = "=0.2.1"
+cargo_metadata = { version = "0.23", default-features = false }
+# Rebuilds the eBPF object when observer-ebpf or observer-common changes.
+observer-ebpf = { path = "../observer-ebpf" }
 
 [dev-dependencies]
 http-body-util = "0.1"
 tower = { version = "0.5", features = ["util"] }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+libc = "0.2"

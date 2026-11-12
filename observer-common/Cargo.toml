@@ -1,0 +1,13 @@
+[package]
+name = "observer-common"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.99"
+description = "Types shared by the eBPF programs and the agent"
+license = "Proprietary"
+
+[features]
+user = ["dep:aya"]
+
+[target.'cfg(target_os = "linux")'.dependencies]
+aya = { version = "=0.16.0", default-features = false, optional = true }

@@ -26,12 +26,22 @@ The design follows the Netflix post "Noisy Neighbor Detection with eBPF".
 2. **Re-enqueue preempted tasks.** On `sched_switch`, a `prev` task that is still `TASK_RUNNING` gets a new enqueue time. Without it, the wait after a preemption goes unmeasured.
 3. **Classify the cause in userspace.** The kernel records raw victim and culprit cgroup pairs. Userspace knows which cgroups share a pod.
 
+## Kernel struct offsets
+
+The programs read five kernel struct members: `task_struct.pid`, `task_struct.cgroups`, `css_set.dfl_cgrp`, `cgroup.kn` and `kernfs_node.id`.
+
+- aya-ebpf has no CO-RE for Rust (aya#349). Offsets from `aya-tool` bindings are fixed to the build kernel.
+- The agent reads the offsets from `/sys/kernel/btf/vmlinux` at startup with `btf-rs`. It descends into anonymous members.
+- The agent passes the offsets to the programs as a global in `.rodata`.
+- The programs dereference BTF pointers directly, with no `bpf_probe_read_kernel`. The verifier accepts this because aya freezes `.rodata`, so the offsets are constants.
+- A missing member, or a member that is not byte aligned, stops the agent at startup.
+
 ## Cardinality rules
 
 Cardinality is a core goal. Each agent pod must keep a small, bounded and stable set of series.
 
 - The default label is the workload, not the pod. Pod names change on each rollout and would create new series.
-- Histograms use few buckets. The kernel keeps fine buckets and the agent folds them into the configured bounds.
+- Histograms use few buckets. The kernel bins each sample against the configured bounds, so the bucket count is fixed at load.
 - Label sets are closed. Never export a pod UID, container id, cgroup id, pid, comm, IP or node label.
 - Each victim keeps at most K culprit workloads. Other culprits sum into one `_other` series.
 - A hard series budget applies to each agent pod. A workload that does not fit goes to `_overflow` for its whole life on the node, so counters stay monotonic.

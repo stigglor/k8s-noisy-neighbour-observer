@@ -2,14 +2,18 @@
 # $BUILDPLATFORM and cross-compiles with cargo-zigbuild, so no QEMU is needed.
 
 # ---- builder ----
-FROM --platform=$BUILDPLATFORM rust:1.94-bookworm@sha256:6ae102bdbf528294bc79ad6e1fae682f6f7c2a6e6621506ba959f9685b308a55 AS builder
+FROM --platform=$BUILDPLATFORM rust:1.99-bookworm@sha256:e6f2cff35d0f309acf8433b4f05878ed77092602c5065cc81801177da0bb3a9c AS builder
 
-ARG TARGETARCH
+# Declared before TARGETARCH, so both platform builds share the toolchain layer.
+COPY scripts/install-ebpf-toolchain.sh /usr/local/bin/
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3-pip \
+    && apt-get install -y --no-install-recommends python3-pip zstd \
     && pip3 install --break-system-packages --no-cache-dir cargo-zigbuild ziglang \
     && rm -rf /var/lib/apt/lists/* \
-    && case "$TARGETARCH" in \
+    && install-ebpf-toolchain.sh
+
+ARG TARGETARCH
+RUN case "$TARGETARCH" in \
          amd64) echo x86_64-unknown-linux-musl > /rust_target ;; \
          arm64) echo aarch64-unknown-linux-musl > /rust_target ;; \
          *) echo "unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \

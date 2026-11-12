@@ -1,8 +1,15 @@
 [workspace]
-members = ["observer"]
+members = ["observer", "observer-common", "observer-ebpf"]
+# observer-ebpf targets bpfel-unknown-none, so observer/build.rs builds it with the pinned nightly.
+default-members = ["observer", "observer-common"]
 resolver = "2"
 
 [profile.release]
 lto = "thin"
 codegen-units = 1
 strip = true
+
+# bpf-linker emits BTF from the debug info, and the loader needs that BTF.
+[profile.release.package.observer-ebpf]
+debug = 2
+strip = false
