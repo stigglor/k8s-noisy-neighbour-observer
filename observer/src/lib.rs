@@ -1,6 +1,7 @@
 //! Noisy neighbour observer. The binary in `main.rs` wires these modules together, and the
 //! integration tests drive them directly.
 
+pub mod attribution;
 #[cfg(target_os = "linux")]
 pub mod bpf;
 pub mod cardinality;

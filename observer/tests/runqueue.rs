@@ -2,7 +2,8 @@
 //! ignored by default. `make integration` runs it.
 //!
 //! A victim and a hog run in separate cgroups on one CPU. Each is a child process that runs the
-//! `workload` test of this binary, because a domain cgroup moves whole processes.
+//! `workload` test of this binary, because a domain cgroup moves whole processes. The victim must
+//! wait longer under the hog, and must blame the hog for that wait.
 
 #![cfg(target_os = "linux")]
 
@@ -17,7 +18,7 @@ use observer::cardinality::Cardinality;
 use observer::cgroup::{self, Resolver};
 use observer::config::{Config, Granularity};
 use observer::runq::{Accumulator, Owner};
-use observer_common::RunqHist;
+use observer_common::{Pair, RunqHist, IDLE_CG};
 
 const ROLE: &str = "NNO_TEST_ROLE";
 const CGROUP: &str = "NNO_TEST_CGROUP";
@@ -32,10 +33,15 @@ fn victim_waits_longer_under_a_hog() {
     let victim_cgroup = Cgroup::create("victim");
     let hog_cgroup = Cgroup::create("hog");
     let victim_id = victim_cgroup.id();
+    let hog_id = hog_cgroup.id();
     let config = Config::from_env().unwrap();
     let probes = Probes::load(&config).expect("load and attach");
     let cardinality = Cardinality::new(config.series_budget, config.series_per_entity());
-    let mut accumulator = Accumulator::new(Granularity::Workload, cardinality);
+    let mut accumulator = Accumulator::new(
+        Granularity::Workload,
+        cardinality,
+        config.culprits_per_victim,
+    );
     let mut resolver = Resolver::new(&config.cgroup_root);
     let mut read = || {
         let read = probes.read_runq().unwrap();
@@ -46,6 +52,8 @@ fn victim_waits_longer_under_a_hog() {
             _ => Owner::Unresolved(None),
         };
         accumulator.update(read.clone(), resolve, &HashSet::new());
+        let pairs = probes.read_pairs().unwrap();
+        accumulator.update_pairs(pairs.clone(), resolve, &HashSet::new());
         let mut node = RunqHist::default();
         for (_, hist) in accumulator.snapshot() {
             node.bins
@@ -53,14 +61,14 @@ fn victim_waits_longer_under_a_hog() {
                 .zip(hist.bins)
                 .for_each(|(n, c)| *n += c);
         }
-        (read, node, resolver.get(victim_id).cloned())
+        ((read, pairs), node, resolver.get(victim_id).cloned())
     };
 
     let _victim = Workload::spawn("victim", &victim_cgroup, cpu);
     std::thread::sleep(Duration::from_secs(1));
-    let (start, node_start, _) = read();
+    let ((start, _), node_start, _) = read();
     std::thread::sleep(WINDOW);
-    let (end, node_mid, victim) = read();
+    let ((end, _), node_mid, victim) = read();
     assert_eq!(
         victim,
         Some(cgroup::Cgroup::System),
@@ -75,15 +83,81 @@ fn victim_waits_longer_under_a_hog() {
 
     let _hog = Workload::spawn("hog", &hog_cgroup, cpu);
     std::thread::sleep(Duration::from_secs(1));
-    let (start, _, _) = read();
+    let ((start, pairs_start), _, _) = read();
     std::thread::sleep(WINDOW);
-    let (end, node_end, _) = read();
+    let ((end, pairs_end), node_end, _) = read();
     let contended = mean(&start, &end, victim_id);
+    // The wait of each pair in the window, and the share of a culprit in the wait of a victim.
+    let window: HashMap<Pair, u64> = pairs_end
+        .iter()
+        .map(|(pair, ns)| {
+            (
+                *pair,
+                ns - pairs_start.get(pair).copied().unwrap_or_default(),
+            )
+        })
+        .collect();
+    let blame = |victim_cg, culprit_cg| {
+        let pair = Pair {
+            victim_cg,
+            culprit_cg,
+        };
+        window.get(&pair).copied().unwrap_or_default()
+    };
+    // Shares count only attributed wait, so the idle cause stays out of the total.
+    let share = |victim_cg, culprit_cg| {
+        let total: u64 = window
+            .iter()
+            .filter(|(pair, _)| pair.victim_cg == victim_cg && pair.culprit_cg != IDLE_CG)
+            .map(|(_, ns)| ns)
+            .sum();
+        blame(victim_cg, culprit_cg) as f64 / total.max(1) as f64
+    };
+    let top = |victim_cg| {
+        let culprits = window.keys().filter(|pair| pair.victim_cg == victim_cg);
+        culprits
+            .map(|pair| pair.culprit_cg)
+            .max_by_key(|culprit| blame(victim_cg, *culprit))
+    };
+    let ms = |ns: u64| ns / 1_000_000;
 
     println!("victim mean wait: baseline {baseline:?}, under the hog {contended:?}");
+    println!(
+        "wait in {WINDOW:?} in ms: victim behind the hog {}, victim behind itself {}, \
+         hog behind the victim {}, hog behind itself {}",
+        ms(blame(victim_id, hog_id)),
+        ms(blame(victim_id, victim_id)),
+        ms(blame(hog_id, victim_id)),
+        ms(blame(hog_id, hog_id)),
+    );
+    let victim_share = share(victim_id, hog_id);
+    let hog_share = share(hog_id, victim_id);
+    println!("share of the other cgroup: victim {victim_share:.2}, hog {hog_share:.2}");
     assert!(
         contended > baseline * 4 && contended > baseline + Duration::from_micros(500),
         "baseline {baseline:?}, under the hog {contended:?}"
+    );
+    // Every hog thread waits while the victim runs, so only the shares compare. The hog share
+    // depends on CPU speed and thread timing, so only its margin below the victim share holds.
+    assert_eq!(top(victim_id), Some(hog_id), "the hog is the top culprit");
+    assert!(
+        victim_share >= 0.9 && victim_share - hog_share >= 0.3,
+        "victim {victim_share:.2}, hog {hog_share:.2}"
+    );
+    // Each sample goes to RUNQ and to one pair, so the sums match up to the dropped samples and
+    // the samples between the two map reads.
+    let runq_ns = end[&victim_id].sum_ns - start[&victim_id].sum_ns;
+    let pairs_ns: u64 = window
+        .iter()
+        .filter(|(pair, _)| pair.victim_cg == victim_id)
+        .map(|(_, ns)| ns)
+        .sum();
+    let dropped = probes.read_dropped().unwrap();
+    println!("victim wait: RUNQ {runq_ns} ns, pairs {pairs_ns} ns, dropped {dropped:?}");
+    assert!(dropped.iter().all(|(_, count)| *count == 0));
+    assert!(
+        runq_ns.abs_diff(pairs_ns) * 100 < runq_ns,
+        "RUNQ {runq_ns} ns, pairs {pairs_ns} ns"
     );
     assert!(count(&node_start) > 0);
     assert!(count(&node_mid) > count(&node_start));

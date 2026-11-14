@@ -1,6 +1,6 @@
 # noisy-neighbour-observer Helm chart
 
-Deploys the noisy neighbour observer as a DaemonSet. Each agent measures the run queue latency of the workloads on its node with eBPF and serves the result as Prometheus metrics on port 9400. For the metrics and the agent settings see the [repo README](../../README.md).
+Deploys the noisy neighbour observer as a DaemonSet. Each agent measures the run queue latency of the workloads on its node with eBPF, names the workloads that cause the wait, and serves the result as Prometheus metrics on port 9400. For the metrics and the agent settings see the [repo README](../../README.md).
 
 The chart renders no Service. Prometheus scrapes each agent pod directly.
 
@@ -85,9 +85,12 @@ Toggles for a node that blocks the agent with the defaults. All are off by defau
 - The CPU request is 50m. There is no CPU limit, because a CFS throttle would add run queue wait to the agent that measures it.
 - The memory limit must fit the BPF maps, because the kernel charges them to the pod.
 - The cgroup map takes `config.maxCgroups x (8 + 112 x CPUs)` bytes: about 22 MB at 1024 cgroups on a 192 vCPU node.
-- The task map takes about 0.8 MB on any node.
+- The pair map takes `config.maxPairs x (16 + 8 x CPUs)` bytes: about 25 MB at 16384 pairs on a 192 vCPU node.
+- The task map takes about 1.3 MB on any node.
+- With the defaults, the maps take about 49 MB on a 192 vCPU node, and about 6 MB on a 16 vCPU node. The process takes about 30 MB.
+- The 160Mi limit holds the maps of a 192 vCPU node and the process. The 64Mi request covers a node of up to about 128 vCPU.
 - The agent exports the size of each map as `noisy_neighbour_map_bytes`.
-- Raise `resources.limits.memory` when you raise `config.maxCgroups`.
+- Raise `resources.limits.memory` when you raise `config.maxCgroups` or `config.maxPairs`.
 
 ## Probes
 
@@ -117,15 +120,18 @@ Two ways to scrape:
 
 | Granularity | Labels | Series per agent pod | Use |
 |---|---|---|---|
-| `workload` (default) | `namespace`, `workload_kind`, `workload` | 11 for each workload on the node | Day to day. Replicas on one node share a series, and a rollout keeps the same series. |
-| `pod` | adds `pod` | 11 for each pod | Find the replica that waits, for example the one replica next to a noisy pod. |
-| `container` | adds `pod` and `container` | 11 for each container, plus 11 for the `_pod` entity of each pod | Find the container that waits, for example an application against its sidecar. |
+| `workload` (default) | `namespace`, `workload_kind`, `workload` | 16 to 19 for each workload on the node | Day to day. Replicas on one node share a series, and a rollout keeps the same series. |
+| `pod` | adds `pod` | 16 to 19 for each pod | Find the replica that waits, for example the one replica next to a noisy pod. |
+| `container` | adds `pod` and `container` | 16 to 19 for each container, plus 16 to 19 for the `_pod` entity of each pod | Find the container that waits, for example an application against its sidecar. |
 
+- Each entity has 11 histogram series, 4 cause series and 1 `_other` culprit series. Each culprit with its own series adds 1, up to `config.culpritsPerVictim` (default 3).
 - The counts assume the default 8 histogram bounds. Each extra bound adds one series to each entity.
+- The culprit labels are always at workload level, so the granularity does not change the culprit count.
 - The `pod` and `container` labels change on each rollout, so each rollout creates new series. The old series end one read after their pod leaves the node.
 - At `container` granularity, `container="_pod"` collects the pod sandbox and the other pod cgroups that no container owns.
 - `config.seriesBudget` caps the per entity series of each agent pod at 1500 by default. An entity that does not fit goes to `_overflow`, and `noisy_neighbour_overflow_workloads` counts these entities.
-- Size the budget for the granularity you choose. At `container`, a pod with two containers costs about 33 series, so 1500 covers about 45 such pods on a node.
+- Size the budget for the granularity you choose. At `container`, a pod with two containers costs 48 to 57 series, so 1500 covers about 26 to 31 such pods on a node.
+- Culprit series take budget too. When the budget is full, a new culprit goes to `_other`, and the entity keeps its own series.
 - Start with `workload`. To investigate a node, set `pod` or `container` on the release, then set `workload` again when you finish.
 
 ## Values
@@ -140,9 +146,11 @@ Two ways to scrape:
 | `rbac.create` | `true` | ClusterRole with `get`, `list` and `watch` on pods. With `false`, grant them yourself. |
 | `config.granularity` | `workload` | `workload`, `pod` or `container`. `pod` and `container` create new series on each rollout. |
 | `config.histogramBounds` | `[10us, 100us, 500us, 1ms, 5ms, 10ms, 100ms, 1s]` | At most 12, strictly increasing. Units: `ns`, `us`, `ms`, `s`. The agent checks the count and order at startup. |
-| `config.seriesBudget` | `1500` | Must be at least 2 x (bounds + 3). The agent checks this at startup. |
+| `config.seriesBudget` | `1500` | Must be at least 2 x (bounds + 8). The agent checks this at startup. |
+| `config.culpritsPerVictim` | `3` | Culprit workloads with their own series for each entity, at least 1. The agent checks this at startup. |
 | `config.readInterval` | `5s` | Above zero. |
 | `config.maxCgroups` | `1024` | Raise the memory limit with it. |
+| `config.maxPairs` | `16384` | Victim and culprit cgroup pairs. Raise the memory limit with it. |
 | `config.logLevel` | `info` | `RUST_LOG`. |
 | `extraEnv` | `[]` | Extra env entries for the agent. |
 | `port` | `9400` | Port of `/metrics`, `/healthz` and `/version`. |
@@ -154,7 +162,7 @@ Two ways to scrape:
 | `podSecurityContext` | `{}` | |
 | `priorityClassName` | `system-node-critical` | See [Priority class](#priority-class). |
 | `priorityClassQuota.create` | `true` | See [Priority class](#priority-class). |
-| `resources` | 50m CPU, 64Mi memory request, 128Mi memory limit | See [Resources](#resources). |
+| `resources` | 50m CPU, 64Mi memory request, 160Mi memory limit | See [Resources](#resources). |
 | `startupProbe` / `livenessProbe` / `readinessProbe` | `/healthz` | See [Probes](#probes). |
 | `terminationGracePeriodSeconds` | `10` | |
 | `updateStrategy` | `RollingUpdate`, `maxUnavailable: 10%` | |
