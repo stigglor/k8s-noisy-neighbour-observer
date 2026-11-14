@@ -35,15 +35,21 @@ config:
   # set for each pod, and each rollout creates new series.
   granularity: workload
   # -- Bucket bounds of the latency histogram, strictly increasing, at most 12. Units: ns,
-  # us, ms, s. Each entity costs the bound count plus 3 series.
+  # us, ms, s. Each entity costs the bound count plus 8 series.
   histogramBounds: [10us, 100us, 500us, 1ms, 5ms, 10ms, 100ms, 1s]
   # -- The most per entity series for each agent pod. An entity that does not fit goes to
   # _overflow. It must fit 2 entities (_system and _overflow).
   seriesBudget: 1500
+  # -- Culprit workloads with their own series for each victim, at least 1. Each one takes
+  # a series of the budget. The other culprits sum into culprit_workload="_other".
+  culpritsPerVictim: 3
   # -- Time between two reads of the BPF maps.
   readInterval: 5s
   # -- Cgroups the kernel tracks at a time. The memory limit must grow with it, see resources.
   maxCgroups: 1024
+  # -- Victim and culprit cgroup pairs the kernel tracks at a time. The memory limit must
+  # grow with it, see resources.
+  maxPairs: 16384
   # -- Log filter (RUST_LOG).
   logLevel: info
 
@@ -88,15 +94,15 @@ priorityClassQuota:
   create: true
 
 # -- CPU request and memory request and limit. No CPU limit, because CFS throttle would add
-# run queue wait to the agent that measures it. The kernel charges the BPF maps to the pod:
-# RUNQ takes maxCgroups x (8 + 112 x CPUs) bytes, about 22 MB at 1024 cgroups on 192 vCPU, and
-# ENQUEUED about 0.8 MB. The rest of the limit is the process. Raise it with maxCgroups.
+# run queue wait to the agent that measures it. The limit must hold the BPF maps, which grow
+# with maxCgroups, maxPairs and the CPU count (about 49 MB on 192 vCPU), plus about 30 MB for
+# the process. See the chart README.
 resources:
   requests:
     cpu: 50m
     memory: 64Mi
   limits:
-    memory: 128Mi
+    memory: 160Mi
 
 # -- The listener binds only after the programs attach and the first pod list arrives, which
 # can take up to 60s. The startup probe allows 90s, then liveness takes over.

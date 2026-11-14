@@ -1,5 +1,6 @@
 //! The series budget. An entity that does not fit goes to `_overflow` for its whole life on the
-//! node, because a move to its own series later would make the `_overflow` counters fall.
+//! node, because a move to its own series later would make the `_overflow` counters fall. A
+//! culprit series takes one series beyond the entity cost, and the same rule applies to it.
 
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -55,7 +56,21 @@ impl<K: Hash + Eq> Cardinality<K> {
         }
     }
 
-    /// Per entity series, the reserved ones included.
+    /// Takes one series beyond the entity cost, if it fits in the budget.
+    pub fn take_series(&mut self) -> bool {
+        let fits = self.used < self.budget;
+        if fits {
+            self.used += 1;
+        }
+        fits
+    }
+
+    /// Frees series that `take_series` took.
+    pub fn free_series(&mut self, count: usize) {
+        self.used -= count;
+    }
+
+    /// Per entity series, the reserved ones and the culprit series included.
     pub fn series(&self) -> usize {
         self.used
     }
@@ -72,7 +87,7 @@ impl<K: Hash + Eq> Cardinality<K> {
 mod tests {
     use super::*;
 
-    const COST: usize = 11;
+    const COST: usize = 16;
 
     #[test]
     fn five_hundred_workloads_stay_in_budget() {
@@ -116,6 +131,19 @@ mod tests {
         assert_eq!(budget.series(), 3 * COST);
         assert_eq!(budget.overflowed(), 0);
         assert_eq!(budget.assign("d"), Slot::Own);
+    }
+
+    #[test]
+    fn extra_series_share_the_budget() {
+        let mut budget = Cardinality::new(3 * COST + 2, COST);
+        assert_eq!(budget.assign("a"), Slot::Own);
+        assert!(budget.take_series());
+        assert!(budget.take_series());
+        assert!(!budget.take_series());
+        assert_eq!(budget.series(), 3 * COST + 2);
+        assert_eq!(budget.assign("b"), Slot::Overflow);
+        budget.free_series(2);
+        assert_eq!(budget.series(), 3 * COST);
     }
 
     #[test]

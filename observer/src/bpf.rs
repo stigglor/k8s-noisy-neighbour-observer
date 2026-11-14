@@ -7,7 +7,7 @@ use anyhow::{anyhow, Context};
 use aya::maps::{Map, MapData, PerCpuArray, PerCpuHashMap};
 use aya::programs::BtfTracePoint;
 use aya::{include_bytes_aligned, Btf, Ebpf, EbpfLoader};
-use observer_common::{Bounds, RunqHist, MAX_BOUNDS};
+use observer_common::{Bounds, Pair, RunqHist, DROPPED_PAIRS, DROPPED_RUNQ, MAX_BOUNDS};
 
 use crate::config::Config;
 use crate::offsets;
@@ -15,7 +15,11 @@ use crate::offsets;
 const PROGRAMS: [&str; 3] = ["sched_wakeup", "sched_wakeup_new", "sched_switch"];
 
 /// Map names as the eBPF object declares them, and the `map` label of each.
-pub const MAPS: [(&str, &str); 2] = [("ENQUEUED", "enqueued"), ("RUNQ", "runq")];
+pub const MAPS: [(&str, &str); 3] = [
+    ("ENQUEUED", "enqueued"),
+    ("RUNQ", "runq"),
+    ("PREEMPT_WAIT", "pairs"),
+];
 
 /// Holds the attached programs, which detach when it drops.
 pub struct Probes {
@@ -30,6 +34,7 @@ impl Probes {
             .override_global("OFFSETS", &offsets, true)
             .override_global("BOUNDS", &bounds, true)
             .map_max_entries("RUNQ", config.max_cgroups)
+            .map_max_entries("PREEMPT_WAIT", config.max_pairs)
             .load(include_bytes_aligned!(concat!(
                 env!("OUT_DIR"),
                 "/observer"
@@ -83,10 +88,40 @@ impl Probes {
         Ok(())
     }
 
-    /// Samples the programs lost because `RUNQ` was full, summed over CPUs.
-    pub fn read_dropped(&self) -> anyhow::Result<u64> {
+    /// The wait of each victim and culprit pair in nanoseconds, summed over CPUs.
+    pub fn read_pairs(&self) -> anyhow::Result<HashMap<Pair, u64>> {
+        let map: PerCpuHashMap<_, Pair, u64> = PerCpuHashMap::try_from(self.map("PREEMPT_WAIT")?)?;
+        let mut read = HashMap::new();
+        for item in map.iter() {
+            let (pair, per_cpu) = item.context("reading PREEMPT_WAIT")?;
+            read.insert(pair, per_cpu.iter().sum());
+        }
+        Ok(read)
+    }
+
+    /// Deletes pairs from `PREEMPT_WAIT`, with the same loss as `delete_runq`.
+    pub fn delete_pairs(&mut self, pairs: &[Pair]) -> anyhow::Result<()> {
+        let map = self
+            .ebpf
+            .map_mut("PREEMPT_WAIT")
+            .ok_or_else(|| anyhow!("the eBPF object has no map PREEMPT_WAIT"))?;
+        let mut map: PerCpuHashMap<_, Pair, u64> = PerCpuHashMap::try_from(map)?;
+        for pair in pairs {
+            let _ = map.remove(pair);
+        }
+        Ok(())
+    }
+
+    /// Samples the programs lost because a map was full, summed over CPUs, by the `map` label.
+    pub fn read_dropped(&self) -> anyhow::Result<[(&'static str, u64); 2]> {
         let map: PerCpuArray<_, u64> = PerCpuArray::try_from(self.map("DROPPED")?)?;
-        Ok(map.get(&0, 0).context("reading DROPPED")?.iter().sum())
+        let read = |slot| -> anyhow::Result<u64> {
+            Ok(map.get(&slot, 0).context("reading DROPPED")?.iter().sum())
+        };
+        Ok([
+            ("runq", read(DROPPED_RUNQ)?),
+            ("pairs", read(DROPPED_PAIRS)?),
+        ])
     }
 
     /// The key and value memory the kernel preallocates for a map. A per CPU map keeps the key

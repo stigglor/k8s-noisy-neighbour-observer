@@ -55,10 +55,11 @@ mod probes {
     use observer::cgroup::Resolver;
     use observer::config::{Config, Granularity};
     use observer::k8s::{self, PodIndex, Watch};
-    use observer::metrics::{MapLabels, Metrics, RunqueueLatency};
+    use observer::metrics::{MapLabels, Metrics, RunqueueLatency, RunqueueWait};
     use observer::runq::Accumulator;
     use observer::workload::Entity;
     use prometheus_client::metrics::counter::Counter;
+    use prometheus_client::metrics::family::Family;
     use prometheus_client::metrics::gauge::Gauge;
 
     /// Loads and attaches the programs, starts the pod watch, then reads the maps on
@@ -83,15 +84,24 @@ mod probes {
         resolver.scan()?;
         metrics.series_budget.set(config.series_budget as i64);
         let cardinality = Cardinality::new(config.series_budget, config.series_per_entity());
+        let entries = |map| {
+            metrics
+                .map_entries
+                .get_or_create(&MapLabels { map })
+                .clone()
+        };
         let reader = Reader {
             latency: metrics.runqueue_latency.clone(),
-            runq_entries: metrics
-                .map_entries
-                .get_or_create(&MapLabels { map: "runq" })
-                .clone(),
+            wait: metrics.runqueue_wait.clone(),
+            runq_entries: entries("runq"),
+            pairs_entries: entries("pairs"),
             dropped: metrics.dropped_samples.clone(),
-            dropped_seen: 0,
-            accumulator: Accumulator::new(config.granularity, cardinality),
+            dropped_seen: [0; 2],
+            accumulator: Accumulator::new(
+                config.granularity,
+                cardinality,
+                config.culprits_per_victim,
+            ),
             resolver,
             watch,
             index: None,
@@ -112,9 +122,11 @@ mod probes {
 
     struct Reader {
         latency: Arc<RunqueueLatency>,
+        wait: Arc<RunqueueWait>,
         runq_entries: Gauge,
-        dropped: Counter,
-        dropped_seen: u64,
+        pairs_entries: Gauge,
+        dropped: Family<MapLabels, Counter>,
+        dropped_seen: [u64; 2],
         accumulator: Accumulator,
         resolver: Resolver,
         watch: Watch,
@@ -135,6 +147,7 @@ mod probes {
                     tracing::error!(error = format!("{error:#}"), "reading the BPF maps failed");
                 }
                 self.latency.set(self.accumulator.snapshot());
+                self.wait.set(self.accumulator.wait_snapshot());
                 let cardinality = self.accumulator.cardinality();
                 self.series.set(cardinality.series() as i64);
                 self.overflow_workloads.set(cardinality.overflowed() as i64);
@@ -146,7 +159,13 @@ mod probes {
         fn read_once(&mut self, probes: &mut Probes) -> anyhow::Result<()> {
             let runq = probes.read_runq()?;
             self.runq_entries.set(runq.len() as i64);
-            if let Err(error) = self.resolver.refresh(runq.keys().copied()) {
+            let pairs = probes.read_pairs()?;
+            self.pairs_entries.set(pairs.len() as i64);
+            let pair_cgroups = pairs.keys().flat_map(|p| [p.victim_cg, p.culprit_cg]);
+            if let Err(error) = self
+                .resolver
+                .refresh(runq.keys().copied().chain(pair_cgroups))
+            {
                 tracing::warn!(
                     error = format!("{error:#}"),
                     "scanning the cgroup tree failed"
@@ -170,10 +189,18 @@ mod probes {
             let resolve = |cgroup_id| index.owner(resolver.get(cgroup_id));
             let idle = self.accumulator.update(runq, resolve, live);
             probes.delete_runq(&idle)?;
-            let dropped = probes.read_dropped()?;
-            self.dropped
-                .inc_by(dropped.saturating_sub(self.dropped_seen));
-            self.dropped_seen = dropped;
+            let idle = self.accumulator.update_pairs(pairs, resolve, live);
+            probes.delete_pairs(&idle)?;
+            for ((map, dropped), seen) in probes
+                .read_dropped()?
+                .into_iter()
+                .zip(&mut self.dropped_seen)
+            {
+                self.dropped
+                    .get_or_create(&MapLabels { map })
+                    .inc_by(dropped.saturating_sub(*seen));
+                *seen = dropped;
+            }
             Ok(())
         }
     }

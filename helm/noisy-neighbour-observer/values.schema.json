@@ -74,8 +74,10 @@
         "granularity",
         "histogramBounds",
         "seriesBudget",
+        "culpritsPerVictim",
         "readInterval",
         "maxCgroups",
+        "maxPairs",
         "logLevel"
       ],
       "properties": {
@@ -101,6 +103,10 @@
           "minimum": 1,
           "description": "The most per entity series. The agent checks that it fits _system and _overflow."
         },
+        "culpritsPerVictim": {
+          "type": "integer",
+          "description": "Culprit series for each victim. The agent checks that it is at least 1."
+        },
         "readInterval": {
           "type": "string",
           "pattern": "^[0-9]*[1-9][0-9]*(ns|us|ms|s)$"
@@ -109,6 +115,10 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 4294967295
+        },
+        "maxPairs": {
+          "type": "integer",
+          "description": "Size of the pair map. The agent checks the range at startup."
         },
         "logLevel": {
           "type": "string",
