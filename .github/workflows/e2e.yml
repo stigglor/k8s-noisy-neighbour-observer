@@ -1,0 +1,57 @@
+name: e2e
+
+# Installs the chart in a two node kind cluster and runs the e2e assertions. The image build
+# runs in Docker, so the runner needs no eBPF toolchain.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Least privilege: the job only reads the repo.
+permissions:
+  contents: read
+
+env:
+  # Pinned kind release and the sha256 of its linux-amd64 binary.
+  KIND_VERSION: v0.32.0
+  KIND_SHA256: 50030de23cf40a18505f20426f6a8506bedf13c6e509244bd1fa9463721b0f54
+  # The helm that helm.yml validates the chart with, so the e2e installs it the same way.
+  HELM_VERSION: v4.2.0
+  HELM_SHA256: 97dbeb971be4ac4b27e3839976d9564c0fb35c6f3b1da89dd1e292d236af4096
+
+jobs:
+  kind:
+    name: kind e2e
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install kind (${{ env.KIND_VERSION }})
+        run: |
+          curl -fsSLo kind "https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-linux-amd64"
+          echo "${KIND_SHA256}  kind" | sha256sum -c -
+          sudo install -m 0755 kind /usr/local/bin/kind
+          kind version
+
+      - name: Install helm (${{ env.HELM_VERSION }})
+        run: |
+          curl -fsSLo helm.tar.gz "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz"
+          echo "${HELM_SHA256}  helm.tar.gz" | sha256sum -c -
+          tar -xzf helm.tar.gz linux-amd64/helm
+          sudo install -m 0755 linux-amd64/helm /usr/local/bin/helm
+          helm version
+
+      - name: make preflight
+        run: make preflight
+
+      - name: make kind-up kind-test
+        run: make kind-up kind-test
+
+      - name: Agent logs
+        if: failure()
+        run: |
+          for previous in false true; do
+            kubectl --context kind-nno-local -n nno-system logs -l app.kubernetes.io/instance=nno \
+              --all-containers --prefix --tail=100 --previous="$previous" || true
+          done

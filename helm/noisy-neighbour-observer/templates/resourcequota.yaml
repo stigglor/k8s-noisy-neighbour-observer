@@ -1,0 +1,20 @@
+{{- $critical := has .Values.priorityClassName (list "system-node-critical" "system-cluster-critical") -}}
+{{- if and .Values.priorityClassQuota.create $critical (ne .Release.Namespace "kube-system") -}}
+# GKE admits pods of a critical priority class only in a namespace with a quota that matches
+# the class. The quota exists to admit the agent, so its pod count is no real limit.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: {{ include "noisy-neighbour-observer.fullname" . }}-critical-pods
+  labels:
+    {{- include "noisy-neighbour-observer.labels" . | nindent 4 }}
+spec:
+  hard:
+    pods: "1G"
+  scopeSelector:
+    matchExpressions:
+      - scopeName: PriorityClass
+        operator: In
+        values:
+          - {{ .Values.priorityClassName }}
+{{- end }}

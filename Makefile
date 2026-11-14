@@ -64,3 +64,23 @@ preflight: ## Check that the docker engine kernel has BTF and cgroup v2 (needed 
 		if [ -e /sys/fs/cgroup/cgroup.controllers ]; then echo "pass: cgroup v2"; \
 		else echo "fail: cgroup v2 not mounted"; ok=1; fi; \
 		exit $$ok'
+
+.PHONY: helm-validate
+helm-validate: ## Lint the chart and validate each rendered scenario (kubeconform when installed)
+	scripts/helm-validate.sh
+
+.PHONY: helm-version-check
+helm-version-check: ## Require a chart version bump when the chart changes (BASE=origin/main)
+	scripts/helm-version-check.sh
+
+.PHONY: kind-up
+kind-up: ## Create the kind cluster, build and load the image, install the chart
+	scripts/kind-local.sh up
+
+.PHONY: kind-test
+kind-test: ## Run the e2e assertions against the kind cluster
+	scripts/kind-local.sh test
+
+.PHONY: kind-down
+kind-down: ## Delete the kind cluster
+	scripts/kind-local.sh down

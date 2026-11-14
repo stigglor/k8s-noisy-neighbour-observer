@@ -1,0 +1,29 @@
+{{- if .Values.rbac.create -}}
+# Cluster scoped, because the pods of a node live in every namespace. Each agent narrows its
+# watch to its own node with a field selector on spec.nodeName.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "noisy-neighbour-observer.clusterName" . }}
+  labels:
+    {{- include "noisy-neighbour-observer.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "noisy-neighbour-observer.clusterName" . }}
+  labels:
+    {{- include "noisy-neighbour-observer.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "noisy-neighbour-observer.clusterName" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "noisy-neighbour-observer.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

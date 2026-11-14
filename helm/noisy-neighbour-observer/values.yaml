@@ -1,0 +1,167 @@
+# Default values for the noisy-neighbour-observer chart.
+# The defaults place one agent on every Linux node in every node pool.
+
+image:
+  # -- Container image repository. REQUIRED, the chart has no default yet.
+  repository: ""
+  # -- Image tag. Empty means the chart appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# -- Secrets to pull the image from a private registry.
+imagePullSecrets: []
+
+# -- Override the chart name in resource names and labels.
+nameOverride: ""
+# -- Override the full release name.
+fullnameOverride: ""
+
+serviceAccount:
+  # -- Create a ServiceAccount for the agent pods.
+  create: true
+  # -- Name of the ServiceAccount. Empty means the fullname.
+  name: ""
+  # -- Extra annotations for the ServiceAccount.
+  annotations: {}
+
+rbac:
+  # -- Create the ClusterRole and ClusterRoleBinding. The agent lists and watches the pods
+  # of its node, and exits after 60s without a pod list.
+  create: true
+
+# -- Agent configuration, rendered as NNO_* env vars. See the repo README for each one.
+config:
+  # -- Labels of an entity: workload, pod or container. pod and container add a series
+  # set for each pod, and each rollout creates new series.
+  granularity: workload
+  # -- Bucket bounds of the latency histogram, strictly increasing, at most 12. Units: ns,
+  # us, ms, s. Each entity costs the bound count plus 3 series.
+  histogramBounds: [10us, 100us, 500us, 1ms, 5ms, 10ms, 100ms, 1s]
+  # -- The most per entity series for each agent pod. An entity that does not fit goes to
+  # _overflow. It must fit 2 entities (_system and _overflow).
+  seriesBudget: 1500
+  # -- Time between two reads of the BPF maps.
+  readInterval: 5s
+  # -- Cgroups the kernel tracks at a time. The memory limit must grow with it, see resources.
+  maxCgroups: 1024
+  # -- Log filter (RUST_LOG).
+  logLevel: info
+
+# -- Extra env vars for the agent container. A list of full env entries.
+extraEnv: []
+
+# -- Port of /metrics, /healthz and /version.
+port: 9400
+
+# -- Host half of NNO_BIND_ADDR. "[::]" also serves IPv4 when net.ipv6.bindv6only is 0, the
+# Linux default. kubelet probes the pod IP, so "0.0.0.0" fails the probes on an IPv6 cluster.
+bindHost: "[::]"
+
+# -- Run the agent as a privileged container. A fallback for a node that blocks the agent
+# with the default settings. It overrides seLinux.type, so the chart rejects both together.
+privileged: false
+
+# -- Capabilities to add after BPF and PERFMON, for example SYS_ADMIN as a fallback.
+extraCapabilities: []
+
+seLinux:
+  # -- SELinux type of the container, for example spc_t on Bottlerocket (which maps it to
+  # control_t). Set it only if the default label blocks the BTF or hostPath reads.
+  type: ""
+
+appArmor:
+  # -- Run without an AppArmor profile, for COS and GKE Ubuntu if the runtime default profile
+  # blocks the agent. A node without AppArmor ignores it.
+  unconfined: false
+
+# -- Pod level security context. The container security context comes from the values above.
+podSecurityContext: {}
+
+# -- The scheduler preempts other pods to place the agent on a full node, and the kubelet
+# evicts the agent last. Outside kube-system, see priorityClassQuota.
+priorityClassName: system-node-critical
+
+priorityClassQuota:
+  # -- Render a ResourceQuota that admits system-node-critical or system-cluster-critical pods
+  # in the release namespace. GKE rejects pods of these classes outside kube-system without it.
+  # The chart skips it in kube-system and for other classes.
+  create: true
+
+# -- CPU request and memory request and limit. No CPU limit, because CFS throttle would add
+# run queue wait to the agent that measures it. The kernel charges the BPF maps to the pod:
+# RUNQ takes maxCgroups x (8 + 112 x CPUs) bytes, about 22 MB at 1024 cgroups on 192 vCPU, and
+# ENQUEUED about 0.8 MB. The rest of the limit is the process. Raise it with maxCgroups.
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 128Mi
+
+# -- The listener binds only after the programs attach and the first pod list arrives, which
+# can take up to 60s. The startup probe allows 90s, then liveness takes over.
+startupProbe:
+  httpGet:
+    path: /healthz
+    port: metrics
+  periodSeconds: 5
+  timeoutSeconds: 2
+  failureThreshold: 18
+
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: metrics
+  periodSeconds: 10
+  timeoutSeconds: 2
+  failureThreshold: 3
+
+# -- The listener is up only after startup, so /healthz also means ready.
+readinessProbe:
+  httpGet:
+    path: /healthz
+    port: metrics
+  periodSeconds: 10
+  timeoutSeconds: 2
+  failureThreshold: 3
+
+# -- The agent holds no state, so a short grace period is enough.
+terminationGracePeriodSeconds: 10
+
+updateStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    # -- A percentage, so a rollout on a large cluster does not update one node at a time.
+    maxUnavailable: 10%
+
+podMonitor:
+  # -- Render a PodMonitor (monitoring.coreos.com/v1). The VictoriaMetrics operator converts
+  # it too. It keeps the agent labels, sets node and instance to the node name, and drops the
+  # pod and container target labels.
+  enabled: false
+  # -- Scrape interval. Empty means the default of the Prometheus or VMAgent.
+  interval: ""
+  # -- Extra labels for the PodMonitor, for example the selector label of a Prometheus.
+  labels: {}
+
+# -- Add prometheus.io/scrape, port and path annotations to the pods. The scrape config that
+# reads them must set honor_labels: true and must relabel the node name to node and instance.
+prometheusAnnotations: false
+
+podAnnotations: {}
+podLabels: {}
+
+# -- Empty by default, so the agent runs on every node pool.
+nodeSelector: {}
+
+# -- Tolerate every taint, so the agent also runs on dedicated, GPU and spot pools.
+tolerations:
+  - operator: Exists
+
+# -- Extra match expressions for the required node affinity term. The chart always excludes
+# nodes that are not Linux, EKS Fargate nodes and virtual-kubelet nodes, and adds these.
+extraNodeAffinityExpressions: []
+
+# -- Other affinity kinds, for example podAntiAffinity. Use extraNodeAffinityExpressions for
+# node affinity.
+affinity: {}

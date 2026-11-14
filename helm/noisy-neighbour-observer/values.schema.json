@@ -1,0 +1,242 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "noisy-neighbour-observer Helm values",
+  "type": "object",
+  "required": [
+    "image",
+    "config",
+    "port",
+    "bindHost"
+  ],
+  "properties": {
+    "image": {
+      "type": "object",
+      "required": [
+        "repository"
+      ],
+      "properties": {
+        "repository": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Container image repository (required)."
+        },
+        "tag": {
+          "type": "string",
+          "description": "Image tag. Empty means the chart appVersion."
+        },
+        "pullPolicy": {
+          "type": "string",
+          "enum": [
+            "Always",
+            "IfNotPresent",
+            "Never"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "imagePullSecrets": {
+      "type": "array"
+    },
+    "nameOverride": {
+      "type": "string"
+    },
+    "fullnameOverride": {
+      "type": "string"
+    },
+    "serviceAccount": {
+      "type": "object",
+      "properties": {
+        "create": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "annotations": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": false
+    },
+    "rbac": {
+      "type": "object",
+      "properties": {
+        "create": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "config": {
+      "type": "object",
+      "required": [
+        "granularity",
+        "histogramBounds",
+        "seriesBudget",
+        "readInterval",
+        "maxCgroups",
+        "logLevel"
+      ],
+      "properties": {
+        "granularity": {
+          "type": "string",
+          "enum": [
+            "workload",
+            "pod",
+            "container"
+          ]
+        },
+        "histogramBounds": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9]+(ns|us|ms|s)$"
+          },
+          "description": "Bucket bounds with a unit. The agent checks the count and the order at startup."
+        },
+        "seriesBudget": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "The most per entity series. The agent checks that it fits _system and _overflow."
+        },
+        "readInterval": {
+          "type": "string",
+          "pattern": "^[0-9]*[1-9][0-9]*(ns|us|ms|s)$"
+        },
+        "maxCgroups": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4294967295
+        },
+        "logLevel": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "extraEnv": {
+      "type": "array"
+    },
+    "port": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "bindHost": {
+      "type": "string",
+      "minLength": 1
+    },
+    "privileged": {
+      "type": "boolean"
+    },
+    "extraCapabilities": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Z_]+$"
+      }
+    },
+    "seLinux": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "appArmor": {
+      "type": "object",
+      "properties": {
+        "unconfined": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "podSecurityContext": {
+      "type": "object"
+    },
+    "priorityClassName": {
+      "type": "string"
+    },
+    "priorityClassQuota": {
+      "type": "object",
+      "properties": {
+        "create": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "resources": {
+      "type": "object"
+    },
+    "startupProbe": {
+      "type": "object"
+    },
+    "livenessProbe": {
+      "type": "object"
+    },
+    "readinessProbe": {
+      "type": "object"
+    },
+    "terminationGracePeriodSeconds": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "updateStrategy": {
+      "type": "object"
+    },
+    "podMonitor": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "interval": {
+          "type": "string"
+        },
+        "labels": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": false
+    },
+    "prometheusAnnotations": {
+      "type": "boolean"
+    },
+    "podAnnotations": {
+      "type": "object"
+    },
+    "podLabels": {
+      "type": "object"
+    },
+    "nodeSelector": {
+      "type": "object"
+    },
+    "tolerations": {
+      "type": "array"
+    },
+    "extraNodeAffinityExpressions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "key",
+          "operator"
+        ]
+      }
+    },
+    "affinity": {
+      "type": "object"
+    },
+    "global": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": false
+}

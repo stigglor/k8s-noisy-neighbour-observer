@@ -4,7 +4,7 @@ A Kubernetes DaemonSet agent that finds noisy neighbours. It measures the run qu
 
 ## Status
 
-The agent measures run queue latency with eBPF and exports one histogram for each workload on the node. The culprit attribution and the Helm chart come in later changes.
+The agent measures run queue latency with eBPF and exports one histogram for each workload on the node. The culprit attribution comes in a later change.
 
 ## Usage
 
@@ -25,6 +25,8 @@ Build the container image:
 ```
 make docker-build
 ```
+
+Deploy the agent to a cluster with the Helm chart in [`helm/noisy-neighbour-observer`](./helm/noisy-neighbour-observer/README.md). Its README lists the node requirements and the supported environments.
 
 The agent reads these environment variables:
 
