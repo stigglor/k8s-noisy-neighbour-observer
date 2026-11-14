@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # End to end test of the chart in a two node kind cluster, where a tainted worker stands in for
 # a dedicated node pool. Needs BTF and cgroup v2 in the docker engine (`make preflight`).
-# Usage: kind-local.sh up|test|down, also as `make kind-up`, `make kind-test`, `make kind-down`.
+# Usage: kind-local.sh up|test|dashboard|down, also as `make kind-<command>`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -18,6 +18,8 @@ NORBAC_NS="nno-norbac"
 NORBAC_TIMEOUT=120
 # Each poll waits at most this long for the agents to read the maps again.
 POLL_TIMEOUT=90
+DASHBOARD_NS="nno-dashboard"
+DASHBOARD="deploy/dashboard/noisy-neighbour.json"
 # The victim labels of the spin workload.
 SPIN="namespace=\"$WORKLOADS_NS\",workload_kind=\"Deployment\",workload=\"spin\""
 
@@ -245,6 +247,119 @@ $(kctl -n "$NORBAC_NS" logs "daemonset/norbac-noisy-neighbour-observer" --previo
     echo "==> PASS"
 }
 
+# Runs an instant query against VictoriaMetrics through the apiserver service proxy.
+vm_query() {
+    kctl get --raw "/api/v1/namespaces/$DASHBOARD_NS/services/victoria-metrics:8428/proxy/api/v1/query?query=$(jq -rn --arg q "$1" '$q | @uri')"
+}
+
+# Prints the target of each dashboard panel as "<panel>\t<refId>\t<expr>", with the variables set to
+# the spin workload on node $1. The rate interval is 4 scrape intervals of 15s.
+dashboard_targets() {
+    jq -r --arg node "$1" --arg ns "$WORKLOADS_NS" '
+        .panels[] | select(.targets) | .title as $title | .targets[]
+        | [$title, .refId, (.expr
+            | gsub("\\$cluster"; ".*") | gsub("\\$namespace"; $ns) | gsub("\\$workload"; "spin")
+            | gsub("\\$node"; $node) | gsub("\\$__rate_interval"; "1m") | gsub("\\$__range"; "10m"))]
+        | @tsv' "$DASHBOARD"
+}
+
+# Prints the series count of a query, or nothing when the request or the query fails.
+series_count() {
+    vm_query "$1" 2>/dev/null | jq -e 'select(.status == "success") | .data.result | length' 2>/dev/null
+}
+
+# Prints one line for each panel target: pass, FAIL, or "no source" when the query is empty and
+# its cAdvisor or node exporter metric has no series at all.
+dashboard_check() {
+    local panel ref expr count source status
+    while IFS=$'\t' read -r panel ref expr; do
+        count="$(series_count "$expr")" || count=""
+        source="$(grep -oE '(container|node)_[a-z_]+_total' <<<"$expr" | head -1)" || true
+        if [ -n "$count" ] && [ "$count" -gt 0 ]; then
+            status=pass
+        elif [ "$count" = 0 ] && [ -n "$source" ] && [ "$(series_count "count($source)")" = 0 ]; then
+            status="no source"
+        else
+            status=FAIL
+        fi
+        printf '%-10s %-48s %s\n' "$status" "$panel" "$ref"
+    done < <(dashboard_targets "$1")
+}
+
+# Prints "<culprit_namespace>/<culprit_workload>" with the largest share in the Who query.
+dashboard_top_culprit() {
+    vm_query "$(dashboard_targets "$1" | awk -F'\t' '$1 == "Culprit share of wait" { print $3 }')" \
+        | jq -r '[.data.result[] | select(.metric.culprit_workload != "_other")]
+            | max_by(.value[1] | tonumber) | "\(.metric.culprit_namespace)/\(.metric.culprit_workload)"'
+}
+
+# The panel titles and queries, to compare the dashboard that Grafana serves with the file.
+dashboard_panels() { jq -c '[.panels[] | .title, (.targets[]?.expr)]'; }
+
+dashboard() {
+    preflight
+    require jq
+
+    echo "==> install VictoriaMetrics, node exporter and Grafana"
+    kctl apply -f deploy/local/dashboard.yaml
+    kctl -n "$DASHBOARD_NS" create configmap grafana-dashboard --from-file="$DASHBOARD" \
+        --dry-run=client -o yaml | kctl apply -f -
+    # A restart makes Grafana read the new file now, not after the ConfigMap sync delay.
+    kctl -n "$DASHBOARD_NS" rollout restart deploy/grafana
+    kctl -n "$DASHBOARD_NS" rollout status deploy/victoria-metrics deploy/grafana ds/node-exporter --timeout=3m
+
+    echo "==> Grafana serves the dashboard of the file, and its datasource is healthy"
+    local grafana="/api/v1/namespaces/$DASHBOARD_NS/services/grafana:3000/proxy"
+    local want served deadline=$((SECONDS + POLL_TIMEOUT))
+    want="$(dashboard_panels <"$DASHBOARD")"
+    until served="$(kctl get --raw "$grafana/api/dashboards/uid/noisy-neighbour" 2>/dev/null | jq .dashboard)" \
+        && [ "$(dashboard_panels <<<"$served")" = "$want" ]; do
+        [ "$SECONDS" -lt "$deadline" ] || fail "Grafana does not serve the panels of $DASHBOARD"
+        sleep 5
+    done
+    kctl get --raw "$grafana/api/datasources/uid/victoria-metrics/health" | jq -e '.status == "OK"' >/dev/null \
+        || fail "the Grafana datasource is not healthy"
+    echo "    '$(jq -r .title <<<"$served")' version $(jq -r .version <<<"$served"), $(jq length <<<"$want") titles and queries match"
+
+    local node
+    node="$(kctl get nodes -l '!node-role.kubernetes.io/control-plane' -o jsonpath='{.items[0].metadata.name}')"
+    echo "==> every panel query returns data for workload=spin, namespace=$WORKLOADS_NS, node=$node, cluster=.*"
+    # The rate interval needs 2 scrapes in its window, and new series need a few more.
+    local results deadline=$((SECONDS + 240))
+    until results="$(dashboard_check "$node")" && ! grep -q '^FAIL' <<<"$results"; do
+        if [ "$SECONDS" -ge "$deadline" ]; then
+            echo "$results"
+            fail "some panel queries fail or return no data"
+        fi
+        sleep 10
+    done
+    printf '%-10s %-48s %s\n' STATUS PANEL REF
+    echo "$results"
+
+    echo "==> the variables list the e2e values"
+    local label want got
+    for label in cluster namespace workload node; do
+        case "$label" in
+            cluster) want="$CLUSTER" ;;
+            namespace) want="$WORKLOADS_NS" ;;
+            workload) want="spin" ;;
+            node) want="$node" ;;
+        esac
+        got="$(kctl get --raw "/api/v1/namespaces/$DASHBOARD_NS/services/victoria-metrics:8428/proxy/api/v1/label/$label/values?match%5B%5D=noisy_neighbour_runqueue_latency_seconds_count" \
+            | jq -r '.data[]')"
+        grep -qx "$want" <<<"$got" || fail "the $label variable does not list $want"
+        echo "    $label lists $want"
+    done
+
+    echo "==> stress is the top culprit of spin in the Who query"
+    local top
+    top="$(dashboard_top_culprit "$node")"
+    [ "$top" = "$WORKLOADS_NS/stress" ] || fail "the top culprit of spin is '$top'"
+    echo "    top culprit $top"
+
+    echo "==> PASS. Grafana: kubectl --context kind-$CLUSTER -n $DASHBOARD_NS port-forward svc/grafana 3000"
+}
+
 down() {
     kind delete cluster --name "$CLUSTER"
 }
@@ -252,9 +367,10 @@ down() {
 case "${1:-}" in
     up) up ;;
     test) test_flow ;;
+    dashboard) dashboard ;;
     down) down ;;
     *)
-        echo "usage: $0 {up|test|down}"
+        echo "usage: $0 {up|test|dashboard|down}"
         exit 1
         ;;
 esac

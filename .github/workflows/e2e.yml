@@ -48,6 +48,10 @@ jobs:
       - name: make kind-up kind-test
         run: make kind-up kind-test
 
+      # Runs each dashboard panel query, so a metric rename fails the PR.
+      - name: make kind-dashboard
+        run: make kind-dashboard
+
       - name: Agent logs
         if: failure()
         run: |

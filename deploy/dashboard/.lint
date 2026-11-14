@@ -1,0 +1,9 @@
+exclusions:
+  template-job-rule:
+    reason: The job name of the agent scrape differs in each cluster. The cluster and node labels select the agents.
+  template-instance-rule:
+    reason: The scrape sets instance to the node name, so the node variable covers it.
+  target-job-rule:
+    reason: The job name of the agent scrape differs in each cluster. The queries match the metric names of the agent.
+  target-instance-rule:
+    reason: The scrape sets instance to the node name, so the queries match on node.

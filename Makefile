@@ -73,6 +73,14 @@ helm-validate: ## Lint the chart and validate each rendered scenario (kubeconfor
 helm-version-check: ## Require a chart version bump when the chart changes (BASE=origin/main)
 	scripts/helm-version-check.sh
 
+.PHONY: dashboard-lint
+dashboard-lint: ## Lint the dashboard with the pinned dashboard-linter (strict) and check its jq -S form
+	scripts/dashboard-lint.sh
+
+.PHONY: dashboard-fmt
+dashboard-fmt: ## Normalise the dashboard JSON with jq -S
+	scripts/dashboard-lint.sh fmt
+
 .PHONY: kind-up
 kind-up: ## Create the kind cluster, build and load the image, install the chart
 	scripts/kind-local.sh up
@@ -80,6 +88,10 @@ kind-up: ## Create the kind cluster, build and load the image, install the chart
 .PHONY: kind-test
 kind-test: ## Run the e2e assertions against the kind cluster
 	scripts/kind-local.sh test
+
+.PHONY: kind-dashboard
+kind-dashboard: ## Install VictoriaMetrics and Grafana in the kind cluster and check every dashboard query
+	scripts/kind-local.sh dashboard
 
 .PHONY: kind-down
 kind-down: ## Delete the kind cluster
