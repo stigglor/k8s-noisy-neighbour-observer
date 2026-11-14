@@ -1,12 +1,13 @@
 //! Loads and attaches the eBPF programs, and reads their maps.
 
 use std::collections::HashMap;
+use std::hash::Hash;
 use std::path::Path;
 
 use anyhow::{anyhow, Context};
-use aya::maps::{Map, MapData, PerCpuArray, PerCpuHashMap};
+use aya::maps::{Map, MapData, PerCpuArray, PerCpuHashMap, PerCpuValues};
 use aya::programs::BtfTracePoint;
-use aya::{include_bytes_aligned, Btf, Ebpf, EbpfLoader};
+use aya::{include_bytes_aligned, Btf, Ebpf, EbpfLoader, Pod};
 use observer_common::{Bounds, Pair, RunqHist, DROPPED_PAIRS, DROPPED_RUNQ, MAX_BOUNDS};
 
 use crate::config::Config;
@@ -58,10 +59,7 @@ impl Probes {
 
     /// The run queue histogram of each cgroup, summed over CPUs.
     pub fn read_runq(&self) -> anyhow::Result<HashMap<u64, RunqHist>> {
-        let map: PerCpuHashMap<_, u64, RunqHist> = PerCpuHashMap::try_from(self.map("RUNQ")?)?;
-        let mut read = HashMap::new();
-        for item in map.iter() {
-            let (cgroup_id, per_cpu) = item.context("reading RUNQ")?;
+        self.read_per_cpu("RUNQ", |per_cpu: &PerCpuValues<RunqHist>| {
             let mut sum = RunqHist::default();
             for hist in per_cpu.iter() {
                 for (total, count) in sum.bins.iter_mut().zip(hist.bins) {
@@ -69,47 +67,54 @@ impl Probes {
                 }
                 sum.sum_ns += hist.sum_ns;
             }
-            read.insert(cgroup_id, sum);
-        }
-        Ok(read)
-    }
-
-    /// Deletes cgroups from `RUNQ`. A sample that lands between the read and the delete is lost.
-    pub fn delete_runq(&mut self, cgroup_ids: &[u64]) -> anyhow::Result<()> {
-        let map = self
-            .ebpf
-            .map_mut("RUNQ")
-            .ok_or_else(|| anyhow!("the eBPF object has no map RUNQ"))?;
-        let mut map: PerCpuHashMap<_, u64, RunqHist> = PerCpuHashMap::try_from(map)?;
-        for cgroup_id in cgroup_ids {
-            // Only the agent deletes keys, so a failure leaves an idle entry for the next read.
-            let _ = map.remove(cgroup_id);
-        }
-        Ok(())
+            sum
+        })
     }
 
     /// The wait of each victim and culprit pair in nanoseconds, summed over CPUs.
     pub fn read_pairs(&self) -> anyhow::Result<HashMap<Pair, u64>> {
-        let map: PerCpuHashMap<_, Pair, u64> = PerCpuHashMap::try_from(self.map("PREEMPT_WAIT")?)?;
+        self.read_per_cpu("PREEMPT_WAIT", |per_cpu: &PerCpuValues<u64>| {
+            per_cpu.iter().sum()
+        })
+    }
+
+    /// Deletes cgroups from `RUNQ`, and returns the cgroups it deleted.
+    pub fn delete_runq(&mut self, cgroup_ids: &[u64]) -> anyhow::Result<Vec<u64>> {
+        self.delete::<u64, RunqHist>("RUNQ", cgroup_ids)
+    }
+
+    /// Deletes pairs from `PREEMPT_WAIT`, and returns the pairs it deleted.
+    pub fn delete_pairs(&mut self, pairs: &[Pair]) -> anyhow::Result<Vec<Pair>> {
+        self.delete::<Pair, u64>("PREEMPT_WAIT", pairs)
+    }
+
+    fn read_per_cpu<K: Pod + Eq + Hash, V: Pod, T>(
+        &self,
+        name: &str,
+        sum: impl Fn(&PerCpuValues<V>) -> T,
+    ) -> anyhow::Result<HashMap<K, T>> {
+        let map: PerCpuHashMap<_, K, V> = PerCpuHashMap::try_from(self.map(name)?)?;
         let mut read = HashMap::new();
         for item in map.iter() {
-            let (pair, per_cpu) = item.context("reading PREEMPT_WAIT")?;
-            read.insert(pair, per_cpu.iter().sum());
+            let (key, per_cpu) = item.with_context(|| format!("reading {name}"))?;
+            read.insert(key, sum(&per_cpu));
         }
         Ok(read)
     }
 
-    /// Deletes pairs from `PREEMPT_WAIT`, with the same loss as `delete_runq`.
-    pub fn delete_pairs(&mut self, pairs: &[Pair]) -> anyhow::Result<()> {
+    /// Only the agent deletes keys, so a key that fails to delete stays as an idle entry, and
+    /// the caller keeps its last value. A sample between the read and the delete is lost.
+    fn delete<K: Pod, V: Pod>(&mut self, name: &str, keys: &[K]) -> anyhow::Result<Vec<K>> {
         let map = self
             .ebpf
-            .map_mut("PREEMPT_WAIT")
-            .ok_or_else(|| anyhow!("the eBPF object has no map PREEMPT_WAIT"))?;
-        let mut map: PerCpuHashMap<_, Pair, u64> = PerCpuHashMap::try_from(map)?;
-        for pair in pairs {
-            let _ = map.remove(pair);
-        }
-        Ok(())
+            .map_mut(name)
+            .ok_or_else(|| anyhow!("the eBPF object has no map {name}"))?;
+        let mut map: PerCpuHashMap<_, K, V> = PerCpuHashMap::try_from(map)?;
+        Ok(keys
+            .iter()
+            .filter(|key| map.remove(key).is_ok())
+            .copied()
+            .collect())
     }
 
     /// Samples the programs lost because a map was full, summed over CPUs, by the `map` label.

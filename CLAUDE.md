@@ -32,28 +32,35 @@ Each wait in the run queue has a victim, the task that waited, and a culprit cgr
 
 - A task that `sched_switch` preempts, or that is still runnable there, waits behind the preemptor: `next` of that switch.
 - A woken task has no preemptor. Its culprit is the last occupant of the CPU: `prev` at the switch that runs the task.
-- A wait that ends on an idle CPU (`prev` is pid 0) has culprit cgroup 0 and the cause `idle`. A high idle share means CFS throttle or wakeup latency on an idle CPU, not a neighbour.
+- A task whose group the CFS bandwidth limit holds gets the culprit `throttled`, at wakeup or when `sched_switch` takes it off the CPU. The last occupant rule does not apply to it.
+- A task waits in throttle when its cgroup or any ancestor is throttled (`cfs_rq.throttle_count` above 0), so a pod level limit counts too.
+- Known gap: a task that is already queued when its group gets throttled keeps its earlier culprit.
+- A woken task with no culprit that runs after the idle task (pid 0) has culprit cgroup 0 and the cause `idle`. The CPU was idle when the wait ended, so the wait is wakeup latency, or a throttle that the gap above missed.
 - The kernel adds the wait in nanoseconds to the pair of victim and culprit cgroups. It does not count preemptions, because counts blame the wrong side. A light sleeper preempts a hog often, but makes it wait little.
 - A wait is task time. A neighbour with N runnable threads collects up to N times the time that the victim ran. So compare the shares of the wait of one victim, not the wait across victims.
 - The culprit is always at workload level (`culprit_namespace`, `culprit_workload_kind`, `culprit_workload`). Culprit pods or containers would multiply the series.
 - `_system` is a valid culprit. It names every cgroup outside a pod.
-- The cause is `idle` for culprit 0, `system` when the culprit is `_system`, and `same_workload` when the culprit is the workload of the victim. Every other wait is `other_workload`, the noisy neighbour signal.
-- The idle wait gets no culprit series and does not go to `_other`. In `_other` it would look like a neighbour.
-- So the 4 cause series add up to the histogram `_sum`, and the culprit series add up to it less `idle`. Samples that a full map drops are the only gap.
+- The cause is `throttled` or `idle` for those culprits, `system` when the culprit is `_system`, and `same_workload` when the culprit is the workload of the victim. Every other wait is `other_workload`, the noisy neighbour signal.
+- A high `throttled` or `idle` share means the CPU limit of the workload or wakeup latency, not a neighbour.
+- The throttled and idle wait gets no culprit series and does not go to `_other`. In `_other` it would look like a neighbour.
+- So the 5 cause series add up to the histogram `_sum`, and the culprit series add up to it less `throttled` and `idle`. Samples that a full map drops are the only gap.
 
-Each victim exports its wait by cause (4 series) and by culprit. It keeps at most K culprit workloads (`NNO_CULPRITS_PER_VICTIM`, default 3) and one `_other` series that sums the rest.
+Each victim exports its wait by cause (5 series) and by culprit. It keeps at most K culprit workloads (`NNO_CULPRITS_PER_VICTIM`, default 3) and one `_other` series that sums the rest.
 
 - A culprit keeps its series until the culprit or the victim leaves the node. A move to `_other` would make its counter fall.
-- A new culprit gets a series only when three conditions are true. The victim has a free slot. The culprit caused at least 10% of the recent wait of the victim behind culprits, which leaves out `idle`. Its recent wait is at least 10 ms.
+- A new culprit gets a series only when three conditions are true. The victim has a free slot. The culprit caused at least 10% of the recent wait of the victim behind culprits, which leaves out `throttled` and `idle`. Its recent wait is at least 10 ms.
 - The recent wait loses 10% at each read, so the window is about 10 reads.
 - The 10 ms floor keeps the small waits of a quiet victim out of the slots, so a later hog still finds a free slot.
-- Each culprit series takes one series of the budget. When the budget is full, a new culprit goes to `_other`, and the victim keeps its own series.
+- Each culprit series takes one series of the budget, but only while the used series stay below 90% of the budget after it. Else a new culprit goes to `_other`, and the victim keeps its own series.
+- Entities can use the whole budget, so culprit series never push a new entity into `_overflow`.
 - While the victim or the culprit of a pair is unresolved, the wait of the pair stays pending, as for a cgroup. It never shows under a temporary label.
 - A culprit workload with no live pod and no pair in a read loses its series one read later. The agent then frees its budget.
 
 ## Kernel struct offsets
 
-The programs read five kernel struct members: `task_struct.pid`, `task_struct.cgroups`, `css_set.dfl_cgrp`, `cgroup.kn` and `kernfs_node.id`.
+The programs read eight kernel struct members: `task_struct.pid`, `task_struct.cgroups`, `css_set.dfl_cgrp`, `cgroup.kn`, `kernfs_node.id`, `task_struct.se`, `sched_entity.cfs_rq` and `cfs_rq.throttle_count`.
+
+- `sched_entity.cfs_rq` needs `CONFIG_FAIR_GROUP_SCHED`, and `cfs_rq.throttle_count` needs `CONFIG_CFS_BANDWIDTH`. Every supported EKS and GKE kernel has both.
 
 - aya-ebpf has no CO-RE for Rust (aya#349). Offsets from `aya-tool` bindings are fixed to the build kernel.
 - The agent reads the offsets from `/sys/kernel/btf/vmlinux` at startup with `btf-rs`. It descends into anonymous members.
@@ -69,7 +76,7 @@ Cardinality is a core goal. Each agent pod must keep a small, bounded and stable
 - Histograms use few buckets. The kernel bins each sample against the configured bounds, so the bucket count is fixed at load.
 - Label sets are closed. Never export a pod UID, container id, cgroup id, pid, comm, IP or node label.
 - Each victim keeps at most K culprit workloads. Other culprits sum into one `_other` series. See "Culprit attribution".
-- A hard series budget applies to each agent pod. A workload that does not fit goes to `_overflow` for its whole life on the node, so counters stay monotonic. Culprit series count against the budget too.
+- A hard series budget applies to each agent pod. A workload that does not fit goes to `_overflow` for its whole life on the node, so counters stay monotonic. Culprit series count against the budget too, up to 90% of it.
 - Histograms are classic, not native. The backend is VictoriaMetrics, which cannot scrape native histograms and converts them to bucket series on ingestion.
 - Target labels are stable. The scrape config relabels the node name to `node` and `instance`, and drops `pod` and `container`.
 - The scrape must set `honor_labels: true`. Kubernetes service discovery adds `namespace`, `pod` and `container` target labels for the agent pod, which would otherwise rename the workload labels to `exported_*`.

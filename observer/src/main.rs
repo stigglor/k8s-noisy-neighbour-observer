@@ -159,9 +159,19 @@ mod probes {
         fn read_once(&mut self, probes: &mut Probes) -> anyhow::Result<()> {
             let runq = probes.read_runq()?;
             self.runq_entries.set(runq.len() as i64);
-            let pairs = probes.read_pairs()?;
-            self.pairs_entries.set(pairs.len() as i64);
-            let pair_cgroups = pairs.keys().flat_map(|p| [p.victim_cg, p.culprit_cg]);
+            // A failed pair read skips the attribution of this read, not the histogram.
+            let pairs = match probes.read_pairs() {
+                Ok(pairs) => {
+                    self.pairs_entries.set(pairs.len() as i64);
+                    Some(pairs)
+                }
+                Err(error) => {
+                    tracing::warn!(error = format!("{error:#}"), "reading the pair map failed");
+                    None
+                }
+            };
+            let pair_cgroups = pairs.iter().flatten();
+            let pair_cgroups = pair_cgroups.flat_map(|(p, _)| [p.victim_cg, p.culprit_cg]);
             if let Err(error) = self
                 .resolver
                 .refresh(runq.keys().copied().chain(pair_cgroups))
@@ -187,10 +197,10 @@ mod probes {
             };
             let resolver = &self.resolver;
             let resolve = |cgroup_id| index.owner(resolver.get(cgroup_id));
-            let idle = self.accumulator.update(runq, resolve, live);
-            probes.delete_runq(&idle)?;
-            let idle = self.accumulator.update_pairs(pairs, resolve, live);
-            probes.delete_pairs(&idle)?;
+            let idle = self.accumulator.update(runq, pairs, resolve, live);
+            let cgroups = probes.delete_runq(&idle.cgroups)?;
+            let pairs = probes.delete_pairs(&idle.pairs)?;
+            self.accumulator.deleted(&cgroups, &pairs);
             for ((map, dropped), seen) in probes
                 .read_dropped()?
                 .into_iter()

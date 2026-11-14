@@ -35,7 +35,7 @@ config:
   # set for each pod, and each rollout creates new series.
   granularity: workload
   # -- Bucket bounds of the latency histogram, strictly increasing, at most 12. Units: ns,
-  # us, ms, s. Each entity costs the bound count plus 8 series.
+  # us, ms, s. Each entity costs the bound count plus 9 series.
   histogramBounds: [10us, 100us, 500us, 1ms, 5ms, 10ms, 100ms, 1s]
   # -- The most per entity series for each agent pod. An entity that does not fit goes to
   # _overflow. It must fit 2 entities (_system and _overflow).
