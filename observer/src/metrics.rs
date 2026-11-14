@@ -143,7 +143,7 @@ impl Collector for RunqueueLatency {
                 .iter()
                 .copied()
                 .zip(hist.bins)
-                .chain([(f64::MAX, overflow)])
+                .chain([(f64::INFINITY, overflow)])
                 .collect();
             let count = buckets.iter().map(|(_, count)| count).sum();
             let sum = hist.sum_ns as f64 / 1e9;
