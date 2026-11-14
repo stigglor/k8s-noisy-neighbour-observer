@@ -46,6 +46,7 @@ observer/                 # agent library and binary (noisy-neighbour-observer)
   src/cgroup.rs           # cgroup id to pod UID and container id, from the cgroup tree
   src/k8s.rs              # pod watch on the node, and the join of cgroups to entities
   src/workload.rs         # workload of a pod from its owner reference, and the entity labels
+  src/attribution.rs      # cause and culprit series of each victim, and the choice of K culprits
   src/cardinality.rs      # series budget and the sticky _overflow assignment
   src/runq.rs             # monotonic totals for each entity from map reads
   src/telemetry.rs        # JSON logs

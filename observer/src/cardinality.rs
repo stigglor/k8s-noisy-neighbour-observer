@@ -1,5 +1,7 @@
 //! The series budget. An entity that does not fit goes to `_overflow` for its whole life on the
-//! node, because a move to its own series later would make the `_overflow` counters fall.
+//! node, because a move to its own series later would make the `_overflow` counters fall. A
+//! culprit series takes one series beyond the entity cost, and the same rule applies to it.
+//! Culprit series stop below 90% of the budget, so they never push a new entity to `_overflow`.
 
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -55,7 +57,22 @@ impl<K: Hash + Eq> Cardinality<K> {
         }
     }
 
-    /// Per entity series, the reserved ones included.
+    /// Takes one series beyond the entity cost, if the used series stay below 90% of the
+    /// budget after it.
+    pub fn take_series(&mut self) -> bool {
+        let fits = (self.used + 1) * 10 < self.budget * 9;
+        if fits {
+            self.used += 1;
+        }
+        fits
+    }
+
+    /// Frees series that `take_series` took.
+    pub fn free_series(&mut self, count: usize) {
+        self.used -= count;
+    }
+
+    /// Per entity series, the reserved ones and the culprit series included.
     pub fn series(&self) -> usize {
         self.used
     }
@@ -72,7 +89,7 @@ impl<K: Hash + Eq> Cardinality<K> {
 mod tests {
     use super::*;
 
-    const COST: usize = 11;
+    const COST: usize = 16;
 
     #[test]
     fn five_hundred_workloads_stay_in_budget() {
@@ -116,6 +133,24 @@ mod tests {
         assert_eq!(budget.series(), 3 * COST);
         assert_eq!(budget.overflowed(), 0);
         assert_eq!(budget.assign("d"), Slot::Own);
+    }
+
+    #[test]
+    fn extra_series_stop_below_ninety_percent() {
+        let mut budget = Cardinality::new(200, COST);
+        assert_eq!(budget.assign("a"), Slot::Own);
+        let mut taken = 0;
+        while budget.take_series() {
+            taken += 1;
+        }
+        assert_eq!(budget.series(), 179, "below 90% of 200");
+        // Entities still use the last 10%, up to the full budget.
+        assert_eq!(budget.assign("b"), Slot::Own);
+        assert_eq!(budget.series(), 195);
+        assert!(!budget.take_series());
+        assert_eq!(budget.assign("c"), Slot::Overflow);
+        budget.free_series(taken);
+        assert_eq!(budget.series(), 4 * COST);
     }
 
     #[test]
