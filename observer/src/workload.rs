@@ -123,6 +123,15 @@ impl Entity {
         self.workload == "_idle"
     }
 
+    /// The culprit of a wait under the CFS bandwidth limit. It never labels a series.
+    pub fn throttled() -> Self {
+        Self::synthetic(Granularity::Workload, "_throttled")
+    }
+
+    pub fn is_throttled(&self) -> bool {
+        self.workload == "_throttled"
+    }
+
     /// The same entity without its `pod` and `container` labels.
     pub fn to_workload(&self) -> Self {
         Self {

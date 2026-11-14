@@ -124,10 +124,16 @@ cause_wait() {
     sed -n "s/^noisy_neighbour_runqueue_wait_by_cause_seconds_total{$SPIN,cause=\"$1\"} //p"
 }
 
+# The entity series of each agent. A new culprit series can join at any read, as its recent wait
+# grows, so the culprit series with their own name do not count.
 series() {
-    local node pod
+    local node pod metrics all named
     while read -r node pod; do
-        echo "$node $(scrape "$pod" | sed -n 's/^noisy_neighbour_series //p')"
+        metrics="$(scrape "$pod")"
+        all="$(sed -n 's/^noisy_neighbour_series //p' <<<"$metrics")"
+        named="$(grep '^noisy_neighbour_runqueue_wait_by_culprit_seconds_total{' <<<"$metrics" \
+            | grep -vc 'culprit_workload="_other"')"
+        echo "$node $((all - named))"
     done < <(agents)
 }
 
@@ -175,22 +181,22 @@ test_flow() {
         grep '^noisy_neighbour_runqueue_latency_seconds_count{' <<<"$metrics" | sed 's/^/      /'
     done < <(agents)
 
-    # spin has a CPU limit, so its throttle wait ends on an idle CPU.
-    echo "==> stress is the top culprit of spin on each node, and spin shows idle wait"
-    local top other idle
+    # spin has a CPU limit, so it waits in throttle, which no neighbour causes.
+    echo "==> stress is the top culprit of spin on each node, and spin shows throttled wait"
+    local top other throttled
     while read -r node pod; do
         deadline=$((SECONDS + POLL_TIMEOUT))
         until metrics="$(scrape "$pod")" \
             && top="$(top_culprit <<<"$metrics")" \
             && other="$(cause_wait other_workload <<<"$metrics")" \
-            && idle="$(cause_wait idle <<<"$metrics")" \
+            && throttled="$(cause_wait throttled <<<"$metrics")" \
             && [ "$top" = "$WORKLOADS_NS/stress" ] \
-            && awk -v o="$other" -v i="$idle" 'BEGIN { exit !(o > 0 && i > 0) }'; do
+            && awk -v o="$other" -v t="$throttled" 'BEGIN { exit !(o > 0 && t > 0) }'; do
             [ "$SECONDS" -lt "$deadline" ] \
-                || fail "spin on $node: top culprit '$top', other_workload '$other', idle '$idle'"
+                || fail "spin on $node: top culprit '$top', other_workload '$other', throttled '$throttled'"
             sleep 5
         done
-        echo "    $node: top culprit $top, other_workload wait ${other}s, idle wait ${idle}s"
+        echo "    $node: top culprit $top, other_workload wait ${other}s, throttled wait ${throttled}s"
         grep -E "^noisy_neighbour_runqueue_wait_by_(cause|culprit)_seconds_total\{$SPIN," <<<"$metrics" | sed 's/^/      /'
     done < <(agents)
 

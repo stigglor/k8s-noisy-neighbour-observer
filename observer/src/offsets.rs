@@ -22,6 +22,11 @@ fn from_btf(btf: &Btf) -> anyhow::Result<Offsets> {
         css_set_dfl_cgrp: offset_of(btf, "css_set", "dfl_cgrp")?,
         cgroup_kn: offset_of(btf, "cgroup", "kn")?,
         kernfs_node_id: offset_of(btf, "kernfs_node", "id")?,
+        task_cfs_rq: offset_of(btf, "task_struct", "se")?
+            + offset_of(btf, "sched_entity", "cfs_rq")
+                .context("the kernel needs CONFIG_FAIR_GROUP_SCHED")?,
+        cfs_rq_throttle_count: offset_of(btf, "cfs_rq", "throttle_count")
+            .context("the kernel needs CONFIG_CFS_BANDWIDTH")?,
     })
 }
 
@@ -183,7 +188,7 @@ mod tests {
         }
     }
 
-    /// The five structs, with `pid` inside an anonymous union inside an anonymous struct and a
+    /// The kernel structs, with `pid` inside an anonymous union inside an anonymous struct and a
     /// forward declaration of `cgroup` ahead of its definition.
     fn kernel_like() -> Btf {
         let mut b = BtfBuilder::new();
@@ -196,15 +201,28 @@ mod tests {
             &[("tgid", int, 0, 0), ("pid", int, 32, 0)],
         );
         let union = b.composite(KIND_UNION, "", 8, &[("", inner, 0, 0), ("raw", int, 0, 0)]);
+        let se = b.composite(
+            KIND_STRUCT,
+            "sched_entity",
+            16,
+            &[("load", int, 0, 0), ("cfs_rq", ptr, 64, 0)],
+        );
         b.composite(
             KIND_STRUCT,
             "task_struct",
-            32,
+            48,
             &[
                 ("flags", int, 0, 0),
                 ("", union, 64, 0),
                 ("cgroups", ptr, 192, 0),
+                ("se", se, 256, 0),
             ],
+        );
+        b.composite(
+            KIND_STRUCT,
+            "cfs_rq",
+            16,
+            &[("nr", int, 0, 0), ("throttle_count", int, 96, 0)],
         );
         b.composite(
             KIND_STRUCT,
@@ -239,6 +257,8 @@ mod tests {
                 css_set_dfl_cgrp: 8,
                 cgroup_kn: 16,
                 kernfs_node_id: 56,
+                task_cfs_rq: 40,
+                cfs_rq_throttle_count: 12,
             }
         );
     }
@@ -250,6 +270,21 @@ mod tests {
         b.composite(KIND_STRUCT, "task_struct", 4, &[("tgid", int, 0, 0)]);
         let error = offset_of(&b.build(), "task_struct", "pid").unwrap_err();
         assert!(error.to_string().contains("task_struct.pid"), "{error}");
+    }
+
+    #[test]
+    fn missing_bandwidth_member_names_the_config() {
+        let mut b = BtfBuilder::new();
+        let int = b.int();
+        b.composite(KIND_STRUCT, "cfs_rq", 4, &[("nr", int, 0, 0)]);
+        let btf = b.build();
+        let error = offset_of(&btf, "cfs_rq", "throttle_count")
+            .context("the kernel needs CONFIG_CFS_BANDWIDTH")
+            .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("CONFIG_CFS_BANDWIDTH"),
+            "{error:#}"
+        );
     }
 
     #[test]
@@ -288,5 +323,7 @@ mod tests {
         let offsets = resolve(path).unwrap();
         assert_ne!(offsets.task_pid, 0);
         assert_ne!(offsets.task_cgroups, 0);
+        assert_ne!(offsets.task_cfs_rq, 0);
+        assert_ne!(offsets.cfs_rq_throttle_count, 0);
     }
 }

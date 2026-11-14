@@ -14,7 +14,8 @@ use aya_ebpf::maps::{LruHashMap, PerCpuArray, PerCpuHashMap};
 use aya_ebpf::programs::BtfTracePointContext;
 use aya_ebpf::Global;
 use observer_common::{
-    Bounds, Enqueued, Offsets, Pair, RunqHist, DROPPED_PAIRS, DROPPED_RUNQ, MAX_BOUNDS,
+    Bounds, Enqueued, Offsets, Pair, RunqHist, DROPPED_PAIRS, DROPPED_RUNQ, IDLE_CG, MAX_BOUNDS,
+    THROTTLED_CG,
 };
 
 const TASK_RUNNING: u32 = 0;
@@ -26,6 +27,8 @@ static OFFSETS: Global<Offsets> = Global::new(Offsets {
     css_set_dfl_cgrp: 0,
     cgroup_kn: 0,
     kernfs_node_id: 0,
+    task_cfs_rq: 0,
+    cfs_rq_throttle_count: 0,
 });
 
 #[no_mangle]
@@ -79,6 +82,14 @@ fn task_cgroup_id(task: *const u8, offsets: &Offsets) -> Option<u64> {
         let kn = read_at::<*const u8>(cgrp, offsets.cgroup_kn)?;
         read_at::<u64>(kn, offsets.kernfs_node_id)
     }
+}
+
+/// Whether the CFS bandwidth limit holds the group of `task` or any group above it.
+#[inline(always)]
+fn throttled(task: *const u8, offsets: &Offsets) -> bool {
+    let cfs_rq =
+        unsafe { read_at::<*const u8>(task, offsets.task_cfs_rq) }.unwrap_or(core::ptr::null());
+    unsafe { read_at::<i32>(cfs_rq, offsets.cfs_rq_throttle_count) }.unwrap_or(0) > 0
 }
 
 #[inline(always)]
@@ -149,21 +160,32 @@ fn blame(pair: &Pair, wait_ns: u64) {
     }
 }
 
+/// A woken task has no preemptor yet, unless its group is throttled.
+#[inline(always)]
+fn wake(task: *const u8) {
+    let culprit_cg = match throttled(task, &OFFSETS.load()) {
+        true => THROTTLED_CG,
+        false => 0,
+    };
+    enqueue(task, unsafe { bpf_ktime_get_ns() }, culprit_cg);
+}
+
 #[btf_tracepoint(function = "sched_wakeup")]
 pub fn sched_wakeup(ctx: BtfTracePointContext) -> i32 {
-    enqueue(ctx.arg(0), unsafe { bpf_ktime_get_ns() }, 0);
+    wake(ctx.arg(0));
     0
 }
 
 #[btf_tracepoint(function = "sched_wakeup_new")]
 pub fn sched_wakeup_new(ctx: BtfTracePointContext) -> i32 {
-    enqueue(ctx.arg(0), unsafe { bpf_ktime_get_ns() }, 0);
+    wake(ctx.arg(0));
     0
 }
 
 /// `TP_PROTO(bool preempt, struct task_struct *prev, struct task_struct *next,
 /// unsigned int prev_state)`. A preempted `prev` stays queued whatever its state, and a `prev`
-/// that is still runnable waits in the queue again, with `next` as its culprit.
+/// that is still runnable waits in the queue again. Its culprit is `next`, or `THROTTLED_CG`
+/// when the bandwidth limit of its group holds it.
 #[btf_tracepoint(function = "sched_switch")]
 pub fn sched_switch(ctx: BtfTracePointContext) -> i32 {
     let offsets = OFFSETS.load();
@@ -174,37 +196,52 @@ pub fn sched_switch(ctx: BtfTracePointContext) -> i32 {
     let now = unsafe { bpf_ktime_get_ns() };
 
     let next_pid = task_pid(next, &offsets);
-    // A plain u64, because an Option spilled across a helper call leaves its payload slot
-    // unwritten on the None path, and the 6.1 verifier rejects that uninitialised stack read.
-    let next_cg = match next_pid {
-        0 => 0,
-        _ => task_cgroup_id(next, &offsets).unwrap_or(0),
-    };
+    // Plain integers that every path writes before a helper call, because kernel 6.1 rejects a
+    // read of uninitialised stack, such as the payload of a spilled Option.
+    let mut enqueued_ts: u64 = 0;
+    let mut enqueued_culprit: u64 = 0;
+    let mut queued = false;
     if next_pid != 0 {
-        if let Some(&enqueued) = unsafe { ENQUEUED.get(&next_pid) } {
-            let _ = ENQUEUED.remove(&next_pid);
-            if next_cg != 0 {
-                let victim_cg = next_cg;
-                let wait_ns = now.saturating_sub(enqueued.ts);
-                record(victim_cg, wait_ns);
-                // Current is still `prev` here. An idle `prev` (pid 0) keeps culprit 0.
-                let culprit_cg = match enqueued.culprit_cg {
-                    0 if bpf_get_current_pid_tgid() as u32 != 0 => unsafe {
-                        bpf_get_current_cgroup_id()
-                    },
-                    culprit_cg => culprit_cg,
-                };
-                let pair = Pair {
-                    victim_cg,
-                    culprit_cg,
-                };
-                blame(&pair, wait_ns);
-            }
+        if let Some(enqueued) = unsafe { ENQUEUED.get(&next_pid) } {
+            enqueued_ts = enqueued.ts;
+            enqueued_culprit = enqueued.culprit_cg;
+            queued = true;
+        }
+    }
+    let requeue = preempt || prev_state == TASK_RUNNING;
+    let prev_throttled = requeue && throttled(prev, &offsets);
+    let mut next_cg: u64 = 0;
+    if next_pid != 0 && (queued || (requeue && !prev_throttled)) {
+        next_cg = task_cgroup_id(next, &offsets).unwrap_or(0);
+    }
+
+    if queued {
+        let _ = ENQUEUED.remove(&next_pid);
+        if next_cg != 0 {
+            let wait_ns = now.saturating_sub(enqueued_ts);
+            record(next_cg, wait_ns);
+            // Current is still `prev` here, so a woken task blames the last occupant.
+            let culprit_cg = match enqueued_culprit {
+                0 if bpf_get_current_pid_tgid() as u32 != 0 => unsafe {
+                    bpf_get_current_cgroup_id()
+                },
+                0 => IDLE_CG,
+                culprit_cg => culprit_cg,
+            };
+            let pair = Pair {
+                victim_cg: next_cg,
+                culprit_cg,
+            };
+            blame(&pair, wait_ns);
         }
     }
 
-    if preempt || prev_state == TASK_RUNNING {
-        enqueue(prev, now, next_cg);
+    if requeue {
+        let culprit_cg = match prev_throttled {
+            true => THROTTLED_CG,
+            false => next_cg,
+        };
+        enqueue(prev, now, culprit_cg);
     }
     0
 }

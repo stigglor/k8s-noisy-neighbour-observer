@@ -1,6 +1,7 @@
 //! The series budget. An entity that does not fit goes to `_overflow` for its whole life on the
 //! node, because a move to its own series later would make the `_overflow` counters fall. A
 //! culprit series takes one series beyond the entity cost, and the same rule applies to it.
+//! Culprit series stop below 90% of the budget, so they never push a new entity to `_overflow`.
 
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -56,9 +57,10 @@ impl<K: Hash + Eq> Cardinality<K> {
         }
     }
 
-    /// Takes one series beyond the entity cost, if it fits in the budget.
+    /// Takes one series beyond the entity cost, if the used series stay below 90% of the
+    /// budget after it.
     pub fn take_series(&mut self) -> bool {
-        let fits = self.used < self.budget;
+        let fits = (self.used + 1) * 10 < self.budget * 9;
         if fits {
             self.used += 1;
         }
@@ -134,16 +136,21 @@ mod tests {
     }
 
     #[test]
-    fn extra_series_share_the_budget() {
-        let mut budget = Cardinality::new(3 * COST + 2, COST);
+    fn extra_series_stop_below_ninety_percent() {
+        let mut budget = Cardinality::new(200, COST);
         assert_eq!(budget.assign("a"), Slot::Own);
-        assert!(budget.take_series());
-        assert!(budget.take_series());
+        let mut taken = 0;
+        while budget.take_series() {
+            taken += 1;
+        }
+        assert_eq!(budget.series(), 179, "below 90% of 200");
+        // Entities still use the last 10%, up to the full budget.
+        assert_eq!(budget.assign("b"), Slot::Own);
+        assert_eq!(budget.series(), 195);
         assert!(!budget.take_series());
-        assert_eq!(budget.series(), 3 * COST + 2);
-        assert_eq!(budget.assign("b"), Slot::Overflow);
-        budget.free_series(2);
-        assert_eq!(budget.series(), 3 * COST);
+        assert_eq!(budget.assign("c"), Slot::Overflow);
+        budget.free_series(taken);
+        assert_eq!(budget.series(), 4 * COST);
     }
 
     #[test]

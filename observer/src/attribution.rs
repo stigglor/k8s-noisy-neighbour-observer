@@ -25,20 +25,24 @@ pub enum Cause {
     OtherWorkload,
     System,
     Idle,
+    Throttled,
 }
 
 impl Cause {
-    pub const ALL: [Cause; 4] = [
+    pub const ALL: [Cause; 5] = [
         Cause::SameWorkload,
         Cause::OtherWorkload,
         Cause::System,
         Cause::Idle,
+        Cause::Throttled,
     ];
 
     /// `culprit` is at workload level. The pod and the container of `victim` do not count.
     pub fn of(victim: &Entity, culprit: &Entity) -> Self {
         if culprit.is_idle() {
             Cause::Idle
+        } else if culprit.is_throttled() {
+            Cause::Throttled
         } else if culprit.is_system() {
             Cause::System
         } else if victim.same_workload(culprit) {
@@ -54,6 +58,7 @@ impl Cause {
             Cause::OtherWorkload => "other_workload",
             Cause::System => "system",
             Cause::Idle => "idle",
+            Cause::Throttled => "throttled",
         }
     }
 }
@@ -62,14 +67,15 @@ impl Cause {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Wait {
     /// In the order of `Cause::ALL`.
-    pub by_cause: [u64; 4],
-    /// The culprits with their own series, then `_other`. The idle wait is not here.
+    pub by_cause: [u64; 5],
+    /// The culprits with their own series, then `_other`. The idle and throttled wait is not
+    /// here.
     pub by_culprit: Vec<(Entity, u64)>,
 }
 
 #[derive(Debug, Default)]
 pub struct Blame {
-    by_cause: [u64; 4],
+    by_cause: [u64; 5],
     /// Culprits with their own series. A culprit keeps its series until it or the victim leaves
     /// the node, because a move to `_other` would make its counter fall.
     culprits: BTreeMap<Entity, u64>,
@@ -82,10 +88,10 @@ pub struct Blame {
 }
 
 impl Blame {
-    /// An idle wait counts only by cause, because no workload took the CPU.
+    /// An idle or throttled wait counts only by cause, because no workload took the CPU.
     pub fn add(&mut self, cause: Cause, culprit: Entity, wait_ns: u64) {
         self.by_cause[cause as usize] += wait_ns;
-        if cause != Cause::Idle {
+        if !matches!(cause, Cause::Idle | Cause::Throttled) {
             *self.read.entry(culprit).or_default() += wait_ns;
         }
     }
@@ -202,6 +208,7 @@ mod tests {
         assert_eq!(Cause::of(&web, &system), Cause::System);
         assert_eq!(Cause::of(&system, &system), Cause::System);
         assert_eq!(Cause::of(&web, &Entity::idle()), Cause::Idle);
+        assert_eq!(Cause::of(&web, &Entity::throttled()), Cause::Throttled);
     }
 
     #[test]
@@ -271,13 +278,14 @@ mod tests {
     }
 
     #[test]
-    fn idle_wait_counts_only_by_cause() {
+    fn idle_and_throttled_wait_count_only_by_cause() {
         let mut blame = Blame::default();
         blame.add(Cause::Idle, Entity::idle(), 500 * MS);
+        blame.add(Cause::Throttled, Entity::throttled(), 900 * MS);
         blame.add(Cause::OtherWorkload, workload("hog"), 50 * MS);
         blame.end_read(3, || true);
         let wait = blame.wait();
-        assert_eq!(wait.by_cause, [0, 50 * MS, 0, 500 * MS]);
+        assert_eq!(wait.by_cause, [0, 50 * MS, 0, 500 * MS, 900 * MS]);
         let by_culprit: Vec<_> = wait.by_culprit.iter().map(|(c, _)| &c.workload).collect();
         assert_eq!(by_culprit, ["hog", "_other"]);
     }
@@ -291,6 +299,6 @@ mod tests {
         assert_eq!(named(&blame), ["a"]);
         let wait = blame.wait();
         assert_eq!(wait.by_culprit.last(), Some(&(Entity::other(), 100 * MS)));
-        assert_eq!(wait.by_cause, [0, 200 * MS, 0, 0]);
+        assert_eq!(wait.by_cause, [0, 200 * MS, 0, 0, 0]);
     }
 }

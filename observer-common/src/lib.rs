@@ -16,6 +16,9 @@ pub struct Offsets {
     pub css_set_dfl_cgrp: u32,
     pub cgroup_kn: u32,
     pub kernfs_node_id: u32,
+    /// `task_struct.se` plus `sched_entity.cfs_rq`.
+    pub task_cfs_rq: u32,
+    pub cfs_rq_throttle_count: u32,
 }
 
 /// Upper bounds of the histogram bins in nanoseconds. Only the first `len` entries count.
@@ -35,8 +38,8 @@ pub struct RunqHist {
     pub sum_ns: u64,
 }
 
-/// A task in the run queue. `culprit_cg` is the cgroup id of the task that preempted it, or 0
-/// after a wakeup.
+/// A task in the run queue. `culprit_cg` is the cgroup id of the task that preempted it, 0
+/// after a wakeup, or `THROTTLED_CG` when its group was throttled.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct Enqueued {
@@ -45,7 +48,8 @@ pub struct Enqueued {
 }
 
 /// A victim cgroup that waited and the culprit cgroup it waited behind. `culprit_cg` is
-/// `IDLE_CG` when the CPU was idle before the victim ran.
+/// `IDLE_CG` when the CPU was idle before the victim ran, and `THROTTLED_CG` when the CFS
+/// bandwidth limit of its group held it.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Pair {
@@ -53,8 +57,9 @@ pub struct Pair {
     pub culprit_cg: u64,
 }
 
-/// No cgroup has id 0.
+/// No cgroup has id 0 or `u64::MAX`.
 pub const IDLE_CG: u64 = 0;
+pub const THROTTLED_CG: u64 = u64::MAX;
 
 /// Slots of the `DROPPED` map, one for each map that can be full.
 pub const DROPPED_RUNQ: u32 = 0;

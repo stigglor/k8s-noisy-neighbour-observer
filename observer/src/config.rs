@@ -46,9 +46,9 @@ pub struct Config {
 
 impl Config {
     /// Series that each entity always has: the histogram buckets with `+Inf`, sum and count, the
-    /// 4 cause series and the `_other` culprit series. Each culprit series adds one more.
+    /// 5 cause series and the `_other` culprit series. Each culprit series adds one more.
     pub fn series_per_entity(&self) -> usize {
-        self.histogram_bounds.len() + 3 + 4 + 1
+        self.histogram_bounds.len() + 3 + 5 + 1
     }
 }
 
@@ -198,7 +198,7 @@ mod tests {
         assert_eq!(config.cgroup_root, PathBuf::from("/sys/fs/cgroup"));
         assert_eq!(config.granularity, Granularity::Workload);
         assert_eq!(config.series_budget, 1500);
-        assert_eq!(config.series_per_entity(), 16);
+        assert_eq!(config.series_per_entity(), 17);
         assert_eq!(config.culprits_per_victim, 3);
         assert_eq!(config.max_pairs, 16384);
     }
@@ -213,7 +213,7 @@ mod tests {
             ("NNO_NODE_NAME", "node-a"),
             ("NNO_CGROUP_ROOT", "/host/sys/fs/cgroup"),
             ("NNO_GRANULARITY", "container"),
-            ("NNO_SERIES_BUDGET", "22"),
+            ("NNO_SERIES_BUDGET", "24"),
             ("NNO_CULPRITS_PER_VICTIM", "1"),
             ("NNO_MAX_PAIRS", "128"),
         ]))
@@ -232,7 +232,7 @@ mod tests {
         assert_eq!(config.node_name.as_deref(), Some("node-a"));
         assert_eq!(config.cgroup_root, PathBuf::from("/host/sys/fs/cgroup"));
         assert_eq!(config.granularity, Granularity::Container);
-        assert_eq!(config.series_budget, 22);
+        assert_eq!(config.series_budget, 24);
         assert_eq!(config.culprits_per_victim, 1);
         assert_eq!(config.max_pairs, 128);
     }
@@ -258,8 +258,8 @@ mod tests {
 
     #[test]
     fn budget_must_fit_the_reserved_entities() {
-        assert!(Config::from_lookup(lookup(&[("NNO_SERIES_BUDGET", "32")])).is_ok());
-        for raw in ["31", "0", "-1", "many"] {
+        assert!(Config::from_lookup(lookup(&[("NNO_SERIES_BUDGET", "34")])).is_ok());
+        for raw in ["33", "0", "-1", "many"] {
             let result = Config::from_lookup(lookup(&[("NNO_SERIES_BUDGET", raw)]));
             assert!(result.is_err(), "{raw}");
         }

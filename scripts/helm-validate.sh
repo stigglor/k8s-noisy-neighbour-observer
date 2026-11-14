@@ -108,7 +108,7 @@ echo "==> scenario: container granularity and custom bounds"
 render \
     --set config.granularity=container \
     --set 'config.histogramBounds={500ns,2us,1ms}' \
-    --set config.seriesBudget=22 | kc
+    --set config.seriesBudget=24 | kc
 
 echo "==> scenario: kube-system needs no quota"
 if helm template ci "$CHART" --namespace kube-system "${REQUIRED[@]}" | grep -q 'kind: ResourceQuota'; then

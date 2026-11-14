@@ -6,7 +6,7 @@ type: application
 
 # version: the chart version (SemVer). Bump it on each change to templates or values.
 # appVersion: the agent image tag that the chart deploys when image.tag is empty.
-version: "0.2.0"
+version: "0.2.1"
 appVersion: "0.1.0"
 # securityContext.appArmorProfile needs 1.30. An older API server drops it without an error.
 kubeVersion: ">=1.30.0-0"

@@ -120,18 +120,18 @@ Two ways to scrape:
 
 | Granularity | Labels | Series per agent pod | Use |
 |---|---|---|---|
-| `workload` (default) | `namespace`, `workload_kind`, `workload` | 16 to 19 for each workload on the node | Day to day. Replicas on one node share a series, and a rollout keeps the same series. |
-| `pod` | adds `pod` | 16 to 19 for each pod | Find the replica that waits, for example the one replica next to a noisy pod. |
-| `container` | adds `pod` and `container` | 16 to 19 for each container, plus 16 to 19 for the `_pod` entity of each pod | Find the container that waits, for example an application against its sidecar. |
+| `workload` (default) | `namespace`, `workload_kind`, `workload` | 17 to 20 for each workload on the node | Day to day. Replicas on one node share a series, and a rollout keeps the same series. |
+| `pod` | adds `pod` | 17 to 20 for each pod | Find the replica that waits, for example the one replica next to a noisy pod. |
+| `container` | adds `pod` and `container` | 17 to 20 for each container, plus 17 to 20 for the `_pod` entity of each pod | Find the container that waits, for example an application against its sidecar. |
 
-- Each entity has 11 histogram series, 4 cause series and 1 `_other` culprit series. Each culprit with its own series adds 1, up to `config.culpritsPerVictim` (default 3).
+- Each entity has 11 histogram series, 5 cause series and 1 `_other` culprit series. Each culprit with its own series adds 1, up to `config.culpritsPerVictim` (default 3).
 - The counts assume the default 8 histogram bounds. Each extra bound adds one series to each entity.
 - The culprit labels are always at workload level, so the granularity does not change the culprit count.
 - The `pod` and `container` labels change on each rollout, so each rollout creates new series. The old series end one read after their pod leaves the node.
 - At `container` granularity, `container="_pod"` collects the pod sandbox and the other pod cgroups that no container owns.
 - `config.seriesBudget` caps the per entity series of each agent pod at 1500 by default. An entity that does not fit goes to `_overflow`, and `noisy_neighbour_overflow_workloads` counts these entities.
-- Size the budget for the granularity you choose. At `container`, a pod with two containers costs 48 to 57 series, so 1500 covers about 26 to 31 such pods on a node.
-- Culprit series take budget too. When the budget is full, a new culprit goes to `_other`, and the entity keeps its own series.
+- Size the budget for the granularity you choose. At `container`, a pod with two containers costs 51 to 60 series, so 1500 covers about 25 to 29 such pods on a node.
+- Culprit series take budget too, but stop below 90% of it. Then a new culprit goes to `_other`, and entities keep the last 10%.
 - Start with `workload`. To investigate a node, set `pod` or `container` on the release, then set `workload` again when you finish.
 
 ## Values
@@ -146,7 +146,7 @@ Two ways to scrape:
 | `rbac.create` | `true` | ClusterRole with `get`, `list` and `watch` on pods. With `false`, grant them yourself. |
 | `config.granularity` | `workload` | `workload`, `pod` or `container`. `pod` and `container` create new series on each rollout. |
 | `config.histogramBounds` | `[10us, 100us, 500us, 1ms, 5ms, 10ms, 100ms, 1s]` | At most 12, strictly increasing. Units: `ns`, `us`, `ms`, `s`. The agent checks the count and order at startup. |
-| `config.seriesBudget` | `1500` | Must be at least 2 x (bounds + 8). The agent checks this at startup. |
+| `config.seriesBudget` | `1500` | Must be at least 2 x (bounds + 9). The agent checks this at startup. |
 | `config.culpritsPerVictim` | `3` | Culprit workloads with their own series for each entity, at least 1. The agent checks this at startup. |
 | `config.readInterval` | `5s` | Above zero. |
 | `config.maxCgroups` | `1024` | Raise the memory limit with it. |

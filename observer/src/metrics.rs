@@ -186,7 +186,7 @@ impl Collector for RunqueueWait {
         }
         let mut metric = encoder.encode_descriptor(
             "noisy_neighbour_runqueue_wait_by_culprit",
-            "Run queue wait of each entity by culprit workload, the rest in _other. No idle wait.",
+            "Run queue wait of each entity by culprit workload, the rest in _other. No idle or throttled wait.",
             Some(&Unit::Seconds),
             MetricType::Counter,
         )?;
@@ -275,7 +275,7 @@ mod tests {
         };
         let spin = Entity::new(Granularity::Pod, "e2e", &spin, "spin-1", "");
         let wait = Wait {
-            by_cause: [0, 2_500_000_000, 1_000, 3_000_000_000],
+            by_cause: [0, 2_500_000_000, 1_000, 3_000_000_000, 4_000_000_000],
             by_culprit: vec![(stress, 2_500_000_000), (Entity::other(), 1_000)],
         };
         metrics.runqueue_wait.set(vec![(spin, wait)]);
@@ -291,6 +291,7 @@ mod tests {
             format!("{cause}{{{victim},cause=\"other_workload\"}} 2.5"),
             format!("{cause}{{{victim},cause=\"system\"}} 0.000001"),
             format!("{cause}{{{victim},cause=\"idle\"}} 3.0"),
+            format!("{cause}{{{victim},cause=\"throttled\"}} 4.0"),
             format!(
                 "{culprit}{{{victim},culprit_namespace=\"e2e\",\
                  culprit_workload_kind=\"Deployment\",culprit_workload=\"stress\"}} 2.5"
