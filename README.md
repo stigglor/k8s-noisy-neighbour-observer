@@ -1,10 +1,10 @@
 # Noisy Neighbour Observer
 
-A Kubernetes DaemonSet agent that finds noisy neighbours. It measures the run queue latency of each pod with eBPF and names the workload that caused each preemption. For the design see [`CLAUDE.md`](./CLAUDE.md).
+A Kubernetes DaemonSet agent that finds noisy neighbours. It measures the run queue latency of each workload with eBPF and names the workloads that caused the wait. For the design see [`CLAUDE.md`](./CLAUDE.md).
 
 ## Status
 
-The agent measures run queue latency with eBPF and exports one histogram for each workload on the node. The culprit attribution comes in a later change.
+The agent measures run queue latency with eBPF and exports one histogram for each workload on the node. It also exports the wait of each workload by cause and by culprit workload. A dashboard comes in a later change.
 
 ## Usage
 
@@ -38,8 +38,10 @@ The agent reads these environment variables:
 | `NNO_NODE_NAME` | none, required | The node of the agent. The agent watches only the pods on it. In a pod, set it from `spec.nodeName` with the downward API. |
 | `NNO_CGROUP_ROOT` | `/sys/fs/cgroup` | The cgroup v2 tree of the host. In a pod, mount the host `/sys/fs/cgroup` read only and point this at it, for example `/host/sys/fs/cgroup`. |
 | `NNO_GRANULARITY` | `workload` | The labels of an entity: `workload` (`namespace`, `workload_kind`, `workload`), `pod` (adds `pod`) or `container` (adds `pod` and `container`). |
-| `NNO_SERIES_BUDGET` | `1500` | The most per entity series. Each entity costs the bounds plus 3 series. `_system` and `_overflow` always hold theirs, so the budget must fit them. |
-| `NNO_MAX_CGROUPS` | `1024` | Cgroups the kernel tracks at a time. Each one costs 8 bytes plus 112 bytes per CPU. When the map is full, new cgroups lose samples, which `noisy_neighbour_dropped_samples_total` counts. |
+| `NNO_SERIES_BUDGET` | `1500` | The most per entity series. Each entity costs the bounds plus 8 series, and one more for each culprit series. `_system` and `_overflow` always hold theirs, so the budget must fit 2 x (bounds + 8). |
+| `NNO_CULPRITS_PER_VICTIM` | `3` | Culprit workloads with their own series for each entity, at least 1. The other culprits sum into `culprit_workload="_other"`. |
+| `NNO_MAX_CGROUPS` | `1024` | Cgroups the kernel tracks at a time. Each one costs 8 bytes plus 112 bytes per CPU. When the map is full, new cgroups lose samples, which `noisy_neighbour_dropped_samples_total{map="runq"}` counts. |
+| `NNO_MAX_PAIRS` | `16384` | Victim and culprit cgroup pairs the kernel tracks at a time. Each one costs 16 bytes plus 8 bytes per CPU. When the map is full, new pairs lose samples, which `noisy_neighbour_dropped_samples_total{map="pairs"}` counts. |
 
 Set `RUST_LOG` to change the log level. The default is `info`. Logs are JSON.
 
@@ -56,22 +58,29 @@ Set `RUST_LOG` to change the log level. The default is `info`. Logs are JSON.
 | Metric | Type | Labels | Use |
 |---|---|---|---|
 | `noisy_neighbour_runqueue_latency_seconds` | histogram | `namespace`, `workload_kind`, `workload` (plus `pod`, `container` by granularity) | Time runnable tasks of each entity wait in the run queue. `sum()` over the labels gives the node. |
-| `noisy_neighbour_map_entries` | gauge | `map` | Entries in the cgroup map (`runq`) at the last read |
+| `noisy_neighbour_runqueue_wait_by_cause_seconds_total` | counter | the entity labels, `cause` | Wait of each entity by cause: `same_workload`, `other_workload`, `system` or `idle`. `other_workload` is the noisy neighbour signal. |
+| `noisy_neighbour_runqueue_wait_by_culprit_seconds_total` | counter | the entity labels, `culprit_namespace`, `culprit_workload_kind`, `culprit_workload` | Wait of each entity by culprit workload. At most `NNO_CULPRITS_PER_VICTIM` culprits, plus `_other` for the rest. |
+| `noisy_neighbour_map_entries` | gauge | `map` | Entries in the cgroup map (`runq`) and the pair map (`pairs`) at the last read |
 | `noisy_neighbour_map_bytes` | gauge | `map` | Memory the kernel preallocates for each BPF map |
-| `noisy_neighbour_dropped_samples_total` | counter | none | Samples lost because the cgroup map was full |
+| `noisy_neighbour_dropped_samples_total` | counter | `map` | Samples lost because the cgroup map (`runq`) or the pair map (`pairs`) was full |
 | `noisy_neighbour_series` | gauge | none | Per entity series the agent exports, `_system` and `_overflow` included |
 | `noisy_neighbour_series_budget` | gauge | none | The value of `NNO_SERIES_BUDGET` |
 | `noisy_neighbour_overflow_workloads` | gauge | none | Entities in `_overflow`, because they did not fit in the budget |
 | `noisy_neighbour_unresolved_cgroups` | gauge | none | Cgroups with samples that wait for the pod watch. Near 0 is healthy. |
 | `noisy_neighbour_build_info` | gauge | `version`, `git_sha` | Build metadata, always 1 |
 
+The wait series carry the same entity labels as the histogram, so a query can divide one by the other. The 4 cause series of an entity add up to its histogram `_sum`, less the samples that `noisy_neighbour_dropped_samples_total` counts. The culprit series add up to the same sum less the `idle` cause. The culprit is always a workload, whatever the granularity.
+
+`cause="idle"` is wait that ends on an idle CPU, so no workload took the CPU. A high idle share means CFS throttle or wakeup latency on an idle CPU, not a neighbour. A wait is task time, so a culprit with many threads collects more wait. Compare the culprit shares of one entity. For the rules see "Culprit attribution" in [`CLAUDE.md`](./CLAUDE.md).
+
 Synthetic entities:
 
-- `_system` collects every cgroup outside a pod: the host, the runtime and the kubelet.
+- `_system` collects every cgroup outside a pod: the host, the runtime and the kubelet. It is also a culprit.
 - `_overflow` collects every entity that did not fit in the budget, for its whole life on the node.
 - At `container` granularity, `container="_pod"` collects a pod cgroup that no container owns, such as CRI-O `conmon` or the pod sandbox.
+- `culprit_workload="_other"` collects the culprits of an entity that have no series of their own.
 
-With the default bounds, each entity costs 11 series. The agent exports 9 other series, so a node with N entities exports 9 + 11 x (N + 2) series, at most 1509 with the default budget.
+With the default bounds, each entity costs 16 series: 11 histogram, 4 cause and 1 `_other` series. Each culprit series adds 1, so an entity costs at most 19. The agent exports 12 other series. So a node with N entities exports between 12 + 16 x (N + 2) and 12 + 19 x (N + 2) series, at most 1512 with the default budget.
 
 ## RBAC
 

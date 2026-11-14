@@ -18,6 +18,8 @@ NORBAC_NS="nno-norbac"
 NORBAC_TIMEOUT=120
 # Each poll waits at most this long for the agents to read the maps again.
 POLL_TIMEOUT=90
+# The victim labels of the spin workload.
+SPIN="namespace=\"$WORKLOADS_NS\",workload_kind=\"Deployment\",workload=\"spin\""
 
 require() {
     command -v "$1" >/dev/null 2>&1 || { echo "error: '$1' is required but not installed."; exit 1; }
@@ -111,6 +113,17 @@ entities() {
     done < <(agents)
 }
 
+# Prints "<namespace>/<workload>" of the named culprit with the most wait of spin in a scrape.
+top_culprit() {
+    sed -n "s/^noisy_neighbour_runqueue_wait_by_culprit_seconds_total{$SPIN,culprit_namespace=\"\([^\"]*\)\",culprit_workload_kind=\"[^\"]*\",culprit_workload=\"\([^\"]*\)\"} \(.*\)/\3 \1\/\2/p" \
+        | grep -v ' _other/_other$' | sort -gr | head -1 | cut -d' ' -f2
+}
+
+# Prints the wait of spin with cause $1 in a scrape, in seconds.
+cause_wait() {
+    sed -n "s/^noisy_neighbour_runqueue_wait_by_cause_seconds_total{$SPIN,cause=\"$1\"} //p"
+}
+
 series() {
     local node pod
     while read -r node pod; do
@@ -160,6 +173,25 @@ test_flow() {
         done
         echo "    $node:"
         grep '^noisy_neighbour_runqueue_latency_seconds_count{' <<<"$metrics" | sed 's/^/      /'
+    done < <(agents)
+
+    # spin has a CPU limit, so its throttle wait ends on an idle CPU.
+    echo "==> stress is the top culprit of spin on each node, and spin shows idle wait"
+    local top other idle
+    while read -r node pod; do
+        deadline=$((SECONDS + POLL_TIMEOUT))
+        until metrics="$(scrape "$pod")" \
+            && top="$(top_culprit <<<"$metrics")" \
+            && other="$(cause_wait other_workload <<<"$metrics")" \
+            && idle="$(cause_wait idle <<<"$metrics")" \
+            && [ "$top" = "$WORKLOADS_NS/stress" ] \
+            && awk -v o="$other" -v i="$idle" 'BEGIN { exit !(o > 0 && i > 0) }'; do
+            [ "$SECONDS" -lt "$deadline" ] \
+                || fail "spin on $node: top culprit '$top', other_workload '$other', idle '$idle'"
+            sleep 5
+        done
+        echo "    $node: top culprit $top, other_workload wait ${other}s, idle wait ${idle}s"
+        grep -E "^noisy_neighbour_runqueue_wait_by_(cause|culprit)_seconds_total\{$SPIN," <<<"$metrics" | sed 's/^/      /'
     done < <(agents)
 
     echo "==> the series count stays the same after a rollout of the stress workload"

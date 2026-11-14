@@ -13,6 +13,7 @@ use prometheus_client::metrics::gauge::Gauge;
 use prometheus_client::metrics::MetricType;
 use prometheus_client::registry::{Registry, Unit};
 
+use crate::attribution::{Cause, Wait};
 use crate::workload::Entity;
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
@@ -28,9 +29,10 @@ pub struct MapLabels {
 
 pub struct Metrics {
     pub runqueue_latency: Arc<RunqueueLatency>,
+    pub runqueue_wait: Arc<RunqueueWait>,
     pub map_entries: Family<MapLabels, Gauge>,
     pub map_bytes: Family<MapLabels, Gauge>,
-    pub dropped_samples: Counter,
+    pub dropped_samples: Family<MapLabels, Counter>,
     pub series: Gauge,
     pub series_budget: Gauge,
     pub overflow_workloads: Gauge,
@@ -44,9 +46,10 @@ impl Metrics {
                 bounds: bounds.iter().map(Duration::as_secs_f64).collect(),
                 totals: Mutex::default(),
             }),
+            runqueue_wait: Arc::default(),
             map_entries: Family::default(),
             map_bytes: Family::default(),
-            dropped_samples: Counter::default(),
+            dropped_samples: Family::default(),
             series: Gauge::default(),
             series_budget: Gauge::default(),
             overflow_workloads: Gauge::default(),
@@ -70,6 +73,7 @@ pub fn registry(metrics: &Metrics) -> Registry {
         })
         .set(1);
     registry.register_collector(Box::new(metrics.runqueue_latency.clone()));
+    registry.register_collector(Box::new(metrics.runqueue_wait.clone()));
     registry.register(
         "noisy_neighbour_map_entries",
         "Entries in each BPF map at the last read",
@@ -82,7 +86,7 @@ pub fn registry(metrics: &Metrics) -> Registry {
     );
     registry.register(
         "noisy_neighbour_dropped_samples",
-        "Run queue samples the kernel lost because the cgroup map was full",
+        "Samples the kernel lost because a BPF map was full",
         metrics.dropped_samples.clone(),
     );
     registry.register(
@@ -151,6 +155,66 @@ impl Collector for RunqueueLatency {
     }
 }
 
+/// The run queue wait of each entity by cause and by culprit workload, in seconds. The victim
+/// labels match the histogram, so the series join.
+#[derive(Debug, Default)]
+pub struct RunqueueWait {
+    totals: Mutex<Vec<(Entity, Wait)>>,
+}
+
+impl RunqueueWait {
+    pub fn set(&self, totals: Vec<(Entity, Wait)>) {
+        *self.totals.lock().unwrap_or_else(PoisonError::into_inner) = totals;
+    }
+}
+
+impl Collector for RunqueueWait {
+    fn encode(&self, mut encoder: DescriptorEncoder) -> Result<(), std::fmt::Error> {
+        let totals = self.totals.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut metric = encoder.encode_descriptor(
+            "noisy_neighbour_runqueue_wait_by_cause",
+            "Run queue wait of each entity by the cause of the wait.",
+            Some(&Unit::Seconds),
+            MetricType::Counter,
+        )?;
+        for (entity, wait) in totals.iter() {
+            for (cause, ns) in Cause::ALL.iter().zip(wait.by_cause) {
+                let mut labels = entity.labels();
+                labels.push(("cause", cause.label()));
+                encode_seconds(&mut metric, &labels, ns)?;
+            }
+        }
+        let mut metric = encoder.encode_descriptor(
+            "noisy_neighbour_runqueue_wait_by_culprit",
+            "Run queue wait of each entity by culprit workload, the rest in _other. No idle wait.",
+            Some(&Unit::Seconds),
+            MetricType::Counter,
+        )?;
+        for (entity, wait) in totals.iter() {
+            for (culprit, ns) in &wait.by_culprit {
+                let mut labels = entity.labels();
+                labels.extend([
+                    ("culprit_namespace", culprit.namespace.as_str()),
+                    ("culprit_workload_kind", culprit.workload_kind.as_str()),
+                    ("culprit_workload", culprit.workload.as_str()),
+                ]);
+                encode_seconds(&mut metric, &labels, *ns)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn encode_seconds(
+    metric: &mut prometheus_client::encoding::MetricEncoder,
+    labels: &Vec<(&str, &str)>,
+    ns: u64,
+) -> Result<(), std::fmt::Error> {
+    metric
+        .encode_family(labels)?
+        .encode_counter::<NoLabelSet, _, u64>(&(ns as f64 / 1e9), None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,6 +253,52 @@ mod tests {
             format!("{name}_bucket{{le=\"0.001\",{system}}} 6"),
             format!("{name}_bucket{{le=\"+Inf\",{system}}} 7"),
             format!("{name}_count{{{web}}} 0"),
+        ] {
+            assert!(
+                body.lines().any(|l| l == line),
+                "missing {line:?} in\n{body}"
+            );
+        }
+    }
+
+    #[test]
+    fn wait_encodes_seconds_by_cause_and_culprit() {
+        let metrics = Metrics::new(&[Duration::from_millis(1)]);
+        let stress = Workload {
+            kind: "Deployment".into(),
+            name: "stress".into(),
+        };
+        let stress = Entity::new(Granularity::Workload, "e2e", &stress, "", "");
+        let spin = Workload {
+            kind: "Deployment".into(),
+            name: "spin".into(),
+        };
+        let spin = Entity::new(Granularity::Pod, "e2e", &spin, "spin-1", "");
+        let wait = Wait {
+            by_cause: [0, 2_500_000_000, 1_000, 3_000_000_000],
+            by_culprit: vec![(stress, 2_500_000_000), (Entity::other(), 1_000)],
+        };
+        metrics.runqueue_wait.set(vec![(spin, wait)]);
+
+        let mut body = String::new();
+        encode(&mut body, &registry(&metrics)).unwrap();
+        let victim = r#"namespace="e2e",workload_kind="Deployment",workload="spin",pod="spin-1""#;
+        let cause = "noisy_neighbour_runqueue_wait_by_cause_seconds_total";
+        let culprit = "noisy_neighbour_runqueue_wait_by_culprit_seconds_total";
+        for line in [
+            "# TYPE noisy_neighbour_runqueue_wait_by_cause_seconds counter".to_string(),
+            format!("{cause}{{{victim},cause=\"same_workload\"}} 0.0"),
+            format!("{cause}{{{victim},cause=\"other_workload\"}} 2.5"),
+            format!("{cause}{{{victim},cause=\"system\"}} 0.000001"),
+            format!("{cause}{{{victim},cause=\"idle\"}} 3.0"),
+            format!(
+                "{culprit}{{{victim},culprit_namespace=\"e2e\",\
+                 culprit_workload_kind=\"Deployment\",culprit_workload=\"stress\"}} 2.5"
+            ),
+            format!(
+                "{culprit}{{{victim},culprit_namespace=\"_other\",\
+                 culprit_workload_kind=\"_other\",culprit_workload=\"_other\"}} 0.000001"
+            ),
         ] {
             assert!(
                 body.lines().any(|l| l == line),
