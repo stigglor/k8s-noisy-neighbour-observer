@@ -13,6 +13,8 @@ const DEFAULT_MAX_CGROUPS: &str = "1024";
 const DEFAULT_HISTOGRAM_BOUNDS: &str = "10us,100us,500us,1ms,5ms,10ms,100ms,1s";
 const DEFAULT_CGROUP_ROOT: &str = "/sys/fs/cgroup";
 const DEFAULT_SERIES_BUDGET: &str = "1500";
+const DEFAULT_CULPRITS_PER_VICTIM: &str = "3";
+const DEFAULT_MAX_PAIRS: &str = "16384";
 
 /// The labels that name an entity, the unit that gets its own series.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,12 +38,17 @@ pub struct Config {
     pub granularity: Granularity,
     /// The most per entity series the agent exports.
     pub series_budget: usize,
+    /// Culprit workloads with their own series for each victim, at least 1.
+    pub culprits_per_victim: usize,
+    /// Size of the map of victim and culprit cgroup pairs.
+    pub max_pairs: u32,
 }
 
 impl Config {
-    /// Series of one entity in the latency histogram: the buckets with `+Inf`, sum and count.
+    /// Series that each entity always has: the histogram buckets with `+Inf`, sum and count, the
+    /// 4 cause series and the `_other` culprit series. Each culprit series adds one more.
     pub fn series_per_entity(&self) -> usize {
-        self.histogram_bounds.len() + 3
+        self.histogram_bounds.len() + 3 + 4 + 1
     }
 }
 
@@ -94,6 +101,22 @@ impl Config {
             .parse()
             .with_context(|| format!("NNO_SERIES_BUDGET is not a number: {raw}"))?;
 
+        let raw = var("NNO_CULPRITS_PER_VICTIM", DEFAULT_CULPRITS_PER_VICTIM);
+        let culprits_per_victim: usize = raw
+            .parse()
+            .with_context(|| format!("NNO_CULPRITS_PER_VICTIM is not a number: {raw}"))?;
+        if culprits_per_victim == 0 {
+            bail!("NNO_CULPRITS_PER_VICTIM must be at least 1");
+        }
+
+        let raw = var("NNO_MAX_PAIRS", DEFAULT_MAX_PAIRS);
+        let max_pairs: u32 = raw
+            .parse()
+            .with_context(|| format!("NNO_MAX_PAIRS is not a number: {raw}"))?;
+        if max_pairs == 0 {
+            bail!("NNO_MAX_PAIRS must be above zero");
+        }
+
         let config = Self {
             bind_addr,
             read_interval,
@@ -103,6 +126,8 @@ impl Config {
             cgroup_root,
             granularity,
             series_budget,
+            culprits_per_victim,
+            max_pairs,
         };
         // The _system and _overflow entities always hold their series.
         let reserved = 2 * config.series_per_entity();
@@ -173,7 +198,9 @@ mod tests {
         assert_eq!(config.cgroup_root, PathBuf::from("/sys/fs/cgroup"));
         assert_eq!(config.granularity, Granularity::Workload);
         assert_eq!(config.series_budget, 1500);
-        assert_eq!(config.series_per_entity(), 11);
+        assert_eq!(config.series_per_entity(), 16);
+        assert_eq!(config.culprits_per_victim, 3);
+        assert_eq!(config.max_pairs, 16384);
     }
 
     #[test]
@@ -186,7 +213,9 @@ mod tests {
             ("NNO_NODE_NAME", "node-a"),
             ("NNO_CGROUP_ROOT", "/host/sys/fs/cgroup"),
             ("NNO_GRANULARITY", "container"),
-            ("NNO_SERIES_BUDGET", "12"),
+            ("NNO_SERIES_BUDGET", "22"),
+            ("NNO_CULPRITS_PER_VICTIM", "1"),
+            ("NNO_MAX_PAIRS", "128"),
         ]))
         .unwrap();
         assert_eq!(config.bind_addr.port(), 8080);
@@ -203,7 +232,9 @@ mod tests {
         assert_eq!(config.node_name.as_deref(), Some("node-a"));
         assert_eq!(config.cgroup_root, PathBuf::from("/host/sys/fs/cgroup"));
         assert_eq!(config.granularity, Granularity::Container);
-        assert_eq!(config.series_budget, 12);
+        assert_eq!(config.series_budget, 22);
+        assert_eq!(config.culprits_per_victim, 1);
+        assert_eq!(config.max_pairs, 128);
     }
 
     #[test]
@@ -227,8 +258,8 @@ mod tests {
 
     #[test]
     fn budget_must_fit_the_reserved_entities() {
-        assert!(Config::from_lookup(lookup(&[("NNO_SERIES_BUDGET", "22")])).is_ok());
-        for raw in ["21", "0", "-1", "many"] {
+        assert!(Config::from_lookup(lookup(&[("NNO_SERIES_BUDGET", "32")])).is_ok());
+        for raw in ["31", "0", "-1", "many"] {
             let result = Config::from_lookup(lookup(&[("NNO_SERIES_BUDGET", raw)]));
             assert!(result.is_err(), "{raw}");
         }
@@ -251,6 +282,22 @@ mod tests {
     fn invalid_max_cgroups_fails() {
         for raw in ["0", "-1", "many"] {
             let result = Config::from_lookup(lookup(&[("NNO_MAX_CGROUPS", raw)]));
+            assert!(result.is_err(), "{raw}");
+        }
+    }
+
+    #[test]
+    fn invalid_culprits_per_victim_fails() {
+        for raw in ["0", "-1", "many"] {
+            let result = Config::from_lookup(lookup(&[("NNO_CULPRITS_PER_VICTIM", raw)]));
+            assert!(result.is_err(), "{raw}");
+        }
+    }
+
+    #[test]
+    fn invalid_max_pairs_fails() {
+        for raw in ["0", "-1", "many", "4294967296"] {
+            let result = Config::from_lookup(lookup(&[("NNO_MAX_PAIRS", raw)]));
             assert!(result.is_err(), "{raw}");
         }
     }

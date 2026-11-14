@@ -105,6 +105,40 @@ impl Entity {
         Self::synthetic(granularity, "_overflow")
     }
 
+    /// Every culprit without its own series.
+    pub fn other() -> Self {
+        Self::synthetic(Granularity::Workload, "_other")
+    }
+
+    /// The culprit of a wait that ends on an idle CPU. It never labels a series.
+    pub fn idle() -> Self {
+        Self::synthetic(Granularity::Workload, "_idle")
+    }
+
+    pub fn is_system(&self) -> bool {
+        self.workload == "_system"
+    }
+
+    pub fn is_idle(&self) -> bool {
+        self.workload == "_idle"
+    }
+
+    /// The same entity without its `pod` and `container` labels.
+    pub fn to_workload(&self) -> Self {
+        Self {
+            pod: None,
+            container: None,
+            ..self.clone()
+        }
+    }
+
+    /// Whether both entities belong to the same workload, whatever their pod or container.
+    pub fn same_workload(&self, other: &Self) -> bool {
+        self.namespace == other.namespace
+            && self.workload_kind == other.workload_kind
+            && self.workload == other.workload
+    }
+
     fn synthetic(granularity: Granularity, value: &str) -> Self {
         Self::new(granularity, value, &workload(value, value), value, value)
     }

@@ -108,7 +108,7 @@ echo "==> scenario: container granularity and custom bounds"
 render \
     --set config.granularity=container \
     --set 'config.histogramBounds={500ns,2us,1ms}' \
-    --set config.seriesBudget=12 | kc
+    --set config.seriesBudget=22 | kc
 
 echo "==> scenario: kube-system needs no quota"
 if helm template ci "$CHART" --namespace kube-system "${REQUIRED[@]}" | grep -q 'kind: ResourceQuota'; then
@@ -119,10 +119,11 @@ fi
 echo "==> scenario: large numbers from a values file render as integers"
 values="$(mktemp)"
 trap 'rm -f "$values"' EXIT
-printf 'config:\n  maxCgroups: 1048576\n  seriesBudget: 2000000\n' >"$values"
+printf 'config:\n  maxCgroups: 1048576\n  seriesBudget: 2000000\n  maxPairs: 3000000\n' >"$values"
 numbers_rendered="$(render -f "$values")"
 expect "$numbers_rendered" 'value: "1048576"' "maxCgroups from a values file is not an integer"
 expect "$numbers_rendered" 'value: "2000000"' "seriesBudget from a values file is not an integer"
+expect "$numbers_rendered" 'value: "3000000"' "maxPairs from a values file is not an integer"
 
 echo "==> scenario: cluster scoped names hold the namespace"
 expect "$(render --show-only templates/rbac.yaml)" 'name: ci-noisy-neighbour-observer-nno$' \

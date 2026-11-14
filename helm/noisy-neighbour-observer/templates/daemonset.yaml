@@ -97,10 +97,14 @@ spec:
             # A values file gives numbers as floats, and large floats render as 1e+06.
             - name: NNO_SERIES_BUDGET
               value: {{ int64 .Values.config.seriesBudget | quote }}
+            - name: NNO_CULPRITS_PER_VICTIM
+              value: {{ int64 .Values.config.culpritsPerVictim | quote }}
             - name: NNO_READ_INTERVAL
               value: {{ .Values.config.readInterval | quote }}
             - name: NNO_MAX_CGROUPS
               value: {{ int64 .Values.config.maxCgroups | quote }}
+            - name: NNO_MAX_PAIRS
+              value: {{ int64 .Values.config.maxPairs | quote }}
             - name: RUST_LOG
               value: {{ .Values.config.logLevel | quote }}
             {{- with .Values.extraEnv }}

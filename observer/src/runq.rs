@@ -1,11 +1,12 @@
-//! Turns reads of the `RUNQ` map into monotonic totals for each entity. Each read adds the
-//! increase of each cgroup since the previous read to its entity, so the totals never go down
-//! when the agent deletes a cgroup from the map.
+//! Turns reads of the `RUNQ` and `PREEMPT_WAIT` maps into monotonic totals for each entity.
+//! Each read adds the increase of each cgroup or pair since the previous read to its entity, so
+//! the totals never go down when the agent deletes a key from the map.
 
 use std::collections::{HashMap, HashSet};
 
-use observer_common::RunqHist;
+use observer_common::{Pair, RunqHist, IDLE_CG};
 
+use crate::attribution::{Blame, Cause, Wait};
 use crate::cardinality::{Cardinality, Slot};
 use crate::config::Granularity;
 use crate::workload::Entity;
@@ -34,8 +35,15 @@ struct Pending {
 }
 
 #[derive(Debug, Default)]
+struct PendingPair {
+    wait_ns: u64,
+    reads: u32,
+}
+
+#[derive(Debug, Default)]
 struct EntityState {
     hist: RunqHist,
+    blame: Blame,
     idle_reads: u32,
 }
 
@@ -50,20 +58,38 @@ pub struct Accumulator {
     pending: HashMap<u64, Pending>,
     entities: HashMap<Entity, EntityState>,
     cardinality: Cardinality<Entity>,
-    system: (Entity, RunqHist),
-    overflow: (Entity, RunqHist),
+    system: (Entity, EntityState),
+    overflow: (Entity, EntityState),
+    culprits_per_victim: usize,
+    /// Only the pairs of the latest read.
+    last_pairs: HashMap<Pair, u64>,
+    /// Increases of pairs with an unresolved victim or culprit, kept as `pending` keeps cgroups.
+    pending_pairs: HashMap<Pair, PendingPair>,
+    /// The culprit workload of each culprit cgroup in `last_pairs`. It holds after the pod goes.
+    culprit_owners: HashMap<u64, Entity>,
+    /// Reads with no live pod and no pair for each culprit workload with a series.
+    culprit_idle: HashMap<Entity, u32>,
 }
 
 impl Accumulator {
-    pub fn new(granularity: Granularity, cardinality: Cardinality<Entity>) -> Self {
+    pub fn new(
+        granularity: Granularity,
+        cardinality: Cardinality<Entity>,
+        culprits_per_victim: usize,
+    ) -> Self {
         Self {
             last: HashMap::new(),
             owners: HashMap::new(),
             pending: HashMap::new(),
             entities: HashMap::new(),
             cardinality,
-            system: (Entity::system(granularity), RunqHist::default()),
-            overflow: (Entity::overflow(granularity), RunqHist::default()),
+            system: (Entity::system(granularity), EntityState::default()),
+            overflow: (Entity::overflow(granularity), EntityState::default()),
+            culprits_per_victim,
+            last_pairs: HashMap::new(),
+            pending_pairs: HashMap::new(),
+            culprit_owners: HashMap::new(),
+            culprit_idle: HashMap::new(),
         }
     }
 
@@ -124,17 +150,87 @@ impl Accumulator {
         idle
     }
 
+    /// Adds the wait of each victim and culprit pair since the previous read, and returns the
+    /// pairs with no new wait, for the caller to delete. Call it after `update` with the same
+    /// `resolve` and `live`, so that a victim cgroup has the owner of its histogram.
+    pub fn update_pairs(
+        &mut self,
+        mut read: HashMap<Pair, u64>,
+        resolve: impl Fn(u64) -> Owner,
+        live: &HashSet<Entity>,
+    ) -> Vec<Pair> {
+        let culprit_cgroups: HashSet<u64> = read.keys().map(|pair| pair.culprit_cg).collect();
+        self.culprit_owners
+            .retain(|cgroup_id, _| culprit_cgroups.contains(cgroup_id));
+        let absent: Vec<Pair> = self
+            .pending_pairs
+            .keys()
+            .filter(|pair| !read.contains_key(pair))
+            .copied()
+            .collect();
+        let mut idle = Vec::new();
+        let mut seen = HashSet::new();
+        for (pair, current) in &read {
+            let last = self.last_pairs.get(pair).copied();
+            if last == Some(*current) {
+                idle.push(*pair);
+            }
+            let increase = match last {
+                Some(last) if *current >= last => current - last,
+                _ => *current,
+            };
+            let mut pending = self.pending_pairs.remove(pair).unwrap_or_default();
+            pending.wait_ns += increase;
+            seen.extend(self.settle(*pair, pending, &resolve));
+        }
+        for pair in &idle {
+            read.remove(pair);
+        }
+        for pair in absent {
+            if let Some(pending) = self.pending_pairs.remove(&pair) {
+                seen.extend(self.settle(pair, pending, &resolve));
+            }
+        }
+        self.last_pairs = read;
+        let limit = self.culprits_per_victim;
+        let cardinality = &mut self.cardinality;
+        let own = self
+            .entities
+            .iter_mut()
+            .filter(|(entity, _)| cardinality.slot(entity) == Some(Slot::Own))
+            .map(|(_, state)| state)
+            .collect::<Vec<_>>();
+        for state in own
+            .into_iter()
+            .chain([&mut self.system.1, &mut self.overflow.1])
+        {
+            state.blame.end_read(limit, || cardinality.take_series());
+        }
+        self.forget_culprits(&seen, live);
+        idle
+    }
+
     /// The totals of `_system`, `_overflow` and each entity with its own series, in a stable order.
     pub fn snapshot(&self) -> Vec<(Entity, RunqHist)> {
+        self.exported(|state| state.hist)
+    }
+
+    /// The wait by cause and by culprit of the entities in `snapshot`, in the same order.
+    pub fn wait_snapshot(&self) -> Vec<(Entity, Wait)> {
+        self.exported(|state| state.blame.wait())
+    }
+
+    fn exported<T>(&self, view: impl Fn(&EntityState) -> T) -> Vec<(Entity, T)> {
         let mut own: Vec<_> = self
             .entities
             .iter()
             .filter(|(entity, _)| self.cardinality.slot(entity) == Some(Slot::Own))
-            .map(|(entity, state)| (entity.clone(), state.hist))
+            .map(|(entity, state)| (entity.clone(), view(state)))
             .collect();
         own.sort_by(|a, b| a.0.cmp(&b.0));
-        [self.system.clone(), self.overflow.clone()]
+        [&self.system, &self.overflow]
             .into_iter()
+            .map(|(entity, state)| (entity.clone(), view(state)))
             .chain(own)
             .collect()
     }
@@ -148,11 +244,9 @@ impl Accumulator {
         self.pending.len()
     }
 
-    /// Clones the entity only when it is new to the budget or to the totals.
-    fn add_to(&mut self, entity: &Entity, increase: &RunqHist) {
-        if *increase == RunqHist::default() {
-            return;
-        }
+    /// The state that takes the samples of an entity: its own, or the one of `_overflow`. Clones
+    /// the entity only when it is new to the budget or to the totals.
+    fn state_of(&mut self, entity: &Entity) -> &mut EntityState {
         let slot = match self.cardinality.slot(entity) {
             Some(slot) => slot,
             None => self.cardinality.assign(entity.clone()),
@@ -162,16 +256,123 @@ impl Accumulator {
             self.entities.insert(entity.clone(), EntityState::default());
         }
         match (slot, self.entities.get_mut(entity)) {
-            (Slot::Own, Some(state)) => add(&mut state.hist, increase),
-            _ => add(&mut self.overflow.1, increase),
+            (Slot::Own, Some(state)) => state,
+            _ => &mut self.overflow.1,
         }
     }
 
     fn flush(&mut self, owner: &Owner, hist: &RunqHist) {
+        if *hist == RunqHist::default() {
+            return;
+        }
         match owner {
-            Owner::System => add(&mut self.system.1, hist),
-            Owner::Entity(entity) => self.add_to(entity, hist),
+            Owner::System => add(&mut self.system.1.hist, hist),
+            Owner::Entity(entity) => add(&mut self.state_of(entity).hist, hist),
             Owner::Unresolved(_) => {}
+        }
+    }
+
+    /// Adds the pending wait of a pair to its victim, or keeps it while the victim or the culprit
+    /// is unresolved, as `wait` does for a cgroup. Returns the culprit workload once it resolves.
+    fn settle(
+        &mut self,
+        pair: Pair,
+        mut pending: PendingPair,
+        resolve: &impl Fn(u64) -> Owner,
+    ) -> Option<Entity> {
+        let culprit = self.culprit_of(pair.culprit_cg, resolve);
+        let victim = match self.owners.get(&pair.victim_cg) {
+            Some(owner) => owner.clone(),
+            None => resolve(pair.victim_cg),
+        };
+        let ready = !matches!(victim, Owner::Unresolved(_)) && culprit.is_some();
+        if !ready {
+            pending.reads += 1;
+            if pending.reads < PENDING_READS {
+                self.pending_pairs.insert(pair, pending);
+                return culprit;
+            }
+        }
+        let victim = match victim {
+            Owner::Unresolved(Some(fallback)) => Owner::Entity(fallback),
+            victim => victim,
+        };
+        if let Some(culprit) = &culprit {
+            self.blame(&victim, culprit.clone(), pending.wait_ns);
+        }
+        culprit
+    }
+
+    fn blame(&mut self, victim: &Owner, culprit: Entity, wait_ns: u64) {
+        if wait_ns == 0 {
+            return;
+        }
+        let (state, cause) = match victim {
+            Owner::System => (&mut self.system.1, Cause::of(&self.system.0, &culprit)),
+            Owner::Entity(entity) => {
+                let cause = Cause::of(entity, &culprit);
+                (self.state_of(entity), cause)
+            }
+            Owner::Unresolved(_) => return,
+        };
+        state.blame.add(cause, culprit, wait_ns);
+    }
+
+    /// The culprit is at workload level, so a pod with no container status names it at once.
+    fn culprit_of(&mut self, cgroup_id: u64, resolve: &impl Fn(u64) -> Owner) -> Option<Entity> {
+        if cgroup_id == IDLE_CG {
+            return Some(Entity::idle());
+        }
+        if let Some(culprit) = self.culprit_owners.get(&cgroup_id) {
+            return Some(culprit.clone());
+        }
+        let owner = match self.owners.get(&cgroup_id) {
+            Some(owner) => owner.clone(),
+            None => resolve(cgroup_id),
+        };
+        let culprit = match owner {
+            Owner::System => self.system.0.to_workload(),
+            Owner::Entity(entity) | Owner::Unresolved(Some(entity)) => entity.to_workload(),
+            Owner::Unresolved(None) => return None,
+        };
+        self.culprit_owners.insert(cgroup_id, culprit.clone());
+        Some(culprit)
+    }
+
+    /// Drops the series of a culprit workload with no live pod and no pair in this read, one
+    /// read after it first goes idle, and frees its budget.
+    fn forget_culprits(&mut self, seen: &HashSet<Entity>, live: &HashSet<Entity>) {
+        let live: HashSet<Entity> = live.iter().map(Entity::to_workload).collect();
+        let named: HashSet<Entity> = self
+            .entities
+            .values()
+            .chain([&self.system.1, &self.overflow.1])
+            .flat_map(|state| state.blame.culprits())
+            .cloned()
+            .collect();
+        self.culprit_idle
+            .retain(|culprit, _| named.contains(culprit));
+        let mut gone = Vec::new();
+        for culprit in named {
+            let idle = self.culprit_idle.entry(culprit.clone()).or_default();
+            if culprit.is_system() || seen.contains(&culprit) || live.contains(&culprit) {
+                *idle = 0;
+                continue;
+            }
+            *idle += 1;
+            if *idle >= IDLE_READS {
+                gone.push(culprit);
+            }
+        }
+        for culprit in gone {
+            self.culprit_idle.remove(&culprit);
+            let freed = self
+                .entities
+                .values_mut()
+                .chain([&mut self.system.1, &mut self.overflow.1])
+                .filter_map(|state| state.blame.forget(&culprit).then_some(()))
+                .count();
+            self.cardinality.free_series(freed);
         }
     }
 
@@ -230,7 +431,9 @@ impl Accumulator {
             }
         }
         for entity in gone {
-            self.entities.remove(&entity);
+            if let Some(state) = self.entities.remove(&entity) {
+                self.cardinality.free_series(state.blame.culprits().count());
+            }
             self.cardinality.release(&entity);
         }
     }
@@ -270,7 +473,7 @@ mod tests {
     use super::*;
     use crate::workload::Workload;
 
-    const COST: usize = 11;
+    const COST: usize = 16;
 
     fn hist(bins: &[u64], sum_ns: u64) -> RunqHist {
         let mut hist = RunqHist {
@@ -294,7 +497,7 @@ mod tests {
     }
 
     fn accumulator(budget: usize) -> Accumulator {
-        Accumulator::new(Granularity::Workload, Cardinality::new(budget, COST))
+        Accumulator::new(Granularity::Workload, Cardinality::new(budget, COST), 3)
     }
 
     /// Cgroup 1 is in `web`, cgroup 2 in `api`, cgroups above 100 are unresolved, others system.
@@ -497,5 +700,166 @@ mod tests {
             hist(&[5], 5),
             "cgroup {over} stays in _overflow"
         );
+    }
+
+    const MS: u64 = 1_000_000;
+
+    fn pairs(entries: &[(u64, u64, u64)]) -> HashMap<Pair, u64> {
+        entries
+            .iter()
+            .map(|&(victim_cg, culprit_cg, ns)| {
+                let pair = Pair {
+                    victim_cg,
+                    culprit_cg,
+                };
+                (pair, ns)
+            })
+            .collect()
+    }
+
+    fn update_pairs(acc: &mut Accumulator, entries: &[(u64, u64, u64)]) -> Vec<Pair> {
+        acc.update_pairs(pairs(entries), resolve, &HashSet::new())
+    }
+
+    fn waits(acc: &Accumulator) -> HashMap<String, Wait> {
+        acc.wait_snapshot()
+            .into_iter()
+            .map(|(entity, wait)| (entity.workload, wait))
+            .collect()
+    }
+
+    fn by_culprit(wait: &Wait) -> Vec<(&str, u64)> {
+        let culprits = wait.by_culprit.iter();
+        culprits.map(|(c, ns)| (c.workload.as_str(), *ns)).collect()
+    }
+
+    #[test]
+    fn pair_wait_goes_to_the_victim_by_cause_and_culprit() {
+        let mut acc = accumulator(1500);
+        update(&mut acc, &[(1, hist(&[3], 125 * MS))]);
+        let entries = [(1, 2, 100 * MS), (1, 1, 20 * MS), (1, 3, 5 * MS)];
+        assert!(update_pairs(&mut acc, &entries).is_empty());
+        let web = &waits(&acc)["web"];
+        assert_eq!(web.by_cause, [20 * MS, 100 * MS, 5 * MS, 0]);
+        assert_eq!(
+            by_culprit(web),
+            [("api", 100 * MS), ("web", 20 * MS), ("_other", 5 * MS)]
+        );
+        assert_eq!(acc.cardinality().series(), 3 * COST + 2);
+        let entries = [(1, 2, 150 * MS), (1, 1, 20 * MS), (1, 3, 5 * MS)];
+        assert_eq!(update_pairs(&mut acc, &entries).len(), 2);
+        assert_eq!(by_culprit(&waits(&acc)["web"])[0], ("api", 150 * MS));
+        assert_eq!(acc.last_pairs.len(), 1);
+    }
+
+    #[test]
+    fn cause_series_add_up_to_the_histogram_sum() {
+        let mut acc = accumulator(1500);
+        for scale in [1, 3] {
+            update(&mut acc, &[(1, hist(&[4], scale * 200 * MS))]);
+            let entries = [(1, 2, 100), (1, 1, 20), (1, 3, 30), (1, IDLE_CG, 50)];
+            let entries = entries.map(|(v, c, ms)| (v, c, scale * ms * MS));
+            update_pairs(&mut acc, &entries);
+            let web = &waits(&acc)["web"];
+            let hist = &totals(&acc)["web"];
+            assert_eq!(web.by_cause.iter().sum::<u64>(), hist.sum_ns);
+            assert_eq!(web.by_cause[3], scale * 50 * MS, "the idle cause");
+            assert!(web.by_culprit.iter().all(|(c, _)| !c.is_idle()));
+        }
+    }
+
+    #[test]
+    fn system_and_overflow_victims_have_wait_series() {
+        let mut acc = accumulator(1500);
+        update_pairs(&mut acc, &[(3, 3, 7)]);
+        let names: Vec<_> = acc.wait_snapshot().into_iter().collect();
+        assert_eq!(names[0].0.workload, "_system");
+        assert_eq!(names[0].1.by_cause, [0, 0, 7, 0]);
+        assert_eq!(by_culprit(&names[0].1), [("_other", 7)]);
+        assert_eq!(names[1].0.workload, "_overflow");
+        assert_eq!(by_culprit(&names[1].1), [("_other", 0)]);
+    }
+
+    #[test]
+    fn unresolved_pair_waits_and_never_shows() {
+        let mut acc = accumulator(1500);
+        let resolved = std::cell::Cell::new(false);
+        let resolve = |id| match id {
+            101 if resolved.get() => Owner::Entity(entity("late")),
+            id => resolve(id),
+        };
+        acc.update_pairs(pairs(&[(1, 101, 30 * MS)]), resolve, &HashSet::new());
+        assert!(!waits(&acc).contains_key("web"));
+        assert_eq!(acc.pending_pairs.len(), 1);
+        resolved.set(true);
+        acc.update_pairs(pairs(&[(1, 101, 50 * MS)]), resolve, &HashSet::new());
+        let web = &waits(&acc)["web"];
+        assert_eq!(web.by_cause, [0, 50 * MS, 0, 0]);
+        assert_eq!(by_culprit(web), [("late", 50 * MS), ("_other", 0)]);
+    }
+
+    #[test]
+    fn unresolved_pair_drops_after_ten_reads() {
+        let mut acc = accumulator(1500);
+        update_pairs(&mut acc, &[(101, 1, 30 * MS)]);
+        for _ in 1..PENDING_READS {
+            assert_eq!(acc.pending_pairs.len(), 1);
+            update_pairs(&mut acc, &[]);
+        }
+        assert!(acc.pending_pairs.is_empty());
+        assert!(acc
+            .wait_snapshot()
+            .iter()
+            .all(|(_, w)| w.by_cause == [0; 4]));
+    }
+
+    #[test]
+    fn unresolved_idle_pair_ages_once_per_read() {
+        let mut acc = accumulator(1500);
+        for _ in 1..PENDING_READS {
+            update_pairs(&mut acc, &[(1, 101, 30 * MS)]);
+            assert_eq!(acc.pending_pairs.len(), 1);
+        }
+        update_pairs(&mut acc, &[(1, 101, 30 * MS)]);
+        assert!(acc.pending_pairs.is_empty());
+    }
+
+    #[test]
+    fn culprit_series_take_budget_and_overflow_to_other() {
+        let mut acc = accumulator(3 * COST + 1);
+        update(&mut acc, &[(1, hist(&[1], 1))]);
+        update_pairs(&mut acc, &[(1, 2, 100 * MS), (1, 3, 100 * MS)]);
+        assert_eq!(acc.cardinality().series(), 3 * COST + 1);
+        let web = &waits(&acc)["web"];
+        assert_eq!(web.by_culprit.len(), 2);
+        assert_eq!(web.by_culprit[1], (Entity::other(), 100 * MS));
+    }
+
+    #[test]
+    fn culprit_series_go_one_read_after_the_culprit_leaves() {
+        let mut acc = accumulator(1500);
+        let live = HashSet::from([entity("web"), entity("api")]);
+        acc.update(read(&[(1, hist(&[1], 1))]), resolve, &live);
+        acc.update_pairs(pairs(&[(1, 2, 100 * MS)]), resolve, &live);
+        let series = acc.cardinality().series();
+        let live = HashSet::from([entity("web")]);
+        acc.update_pairs(pairs(&[(1, 2, 100 * MS)]), resolve, &live);
+        acc.update_pairs(pairs(&[]), resolve, &live);
+        assert_eq!(by_culprit(&waits(&acc)["web"])[0].0, "api", "one more read");
+        acc.update_pairs(pairs(&[]), resolve, &live);
+        assert_eq!(by_culprit(&waits(&acc)["web"]), [("_other", 0)]);
+        assert_eq!(acc.cardinality().series(), series - 1);
+    }
+
+    #[test]
+    fn victim_frees_its_culprit_series() {
+        let mut acc = accumulator(1500);
+        update(&mut acc, &[(1, hist(&[1], 1))]);
+        update_pairs(&mut acc, &[(1, 2, 100 * MS), (1, 3, 100 * MS)]);
+        assert_eq!(acc.cardinality().series(), 3 * COST + 2);
+        update(&mut acc, &[]);
+        update(&mut acc, &[]);
+        assert!(!waits(&acc).contains_key("web"));
+        assert_eq!(acc.cardinality().series(), 2 * COST);
     }
 }
