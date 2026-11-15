@@ -51,9 +51,7 @@ jobs:
       - name: make helm-validate
         run: make helm-validate
 
-      # BASE is the base branch of the PR, not the local default origin/main.
+      # Compares against the latest release tag, which the full fetch above includes.
       - name: make helm-version-check
         if: github.event_name == 'pull_request'
-        env:
-          BASE: origin/${{ github.base_ref }}
         run: make helm-version-check

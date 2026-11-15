@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
-# Require a higher Chart.yaml version when chart files other than *.md change against a base
-# ref. `make helm-version-check [BASE=origin/main]` and CI run this same script.
-# Env overrides: CHART (default helm/noisy-neighbour-observer), BASE (default origin/main).
+# Require a Chart.yaml version above the last release when chart files other than *.md changed
+# since it. Only a release publishes a chart, so an unreleased version can take more changes.
+# Env overrides: CHART (default helm/noisy-neighbour-observer), BASE (default the latest v* tag).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 CHART="${CHART:-helm/noisy-neighbour-observer}"
-BASE="${BASE:-origin/main}"
+if [ -z "${BASE:-}" ]; then
+    git fetch --quiet --tags origin
+    BASE="$(git tag --list 'v[0-9]*' --sort=-v:refname | head -n 1)"
+    BASE="${BASE:-origin/main}"
+fi
 
 # Fetch the base ref if it is not known locally.
 if ! git rev-parse --verify --quiet "$BASE" >/dev/null; then

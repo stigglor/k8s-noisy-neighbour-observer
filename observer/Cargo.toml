@@ -1,6 +1,6 @@
 [package]
 name = "observer"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 rust-version = "1.99"
 description = "Per pod run queue latency and noisy neighbour metrics for Kubernetes nodes"
