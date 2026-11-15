@@ -1,0 +1,34 @@
+name: dashboard
+
+# Runs only when the dashboard, its lint script, the Makefile or this workflow change.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "deploy/dashboard/**"
+      - "scripts/dashboard-lint.sh"
+      - "Makefile"
+      - ".github/workflows/dashboard.yml"
+  pull_request:
+    paths:
+      - "deploy/dashboard/**"
+      - "scripts/dashboard-lint.sh"
+      - "Makefile"
+      - ".github/workflows/dashboard.yml"
+
+# Least privilege: the job only reads the repo.
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: dashboard-linter, jq -S
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The script pins the linter release and checks its sha256.
+      - name: make dashboard-lint
+        run: make dashboard-lint

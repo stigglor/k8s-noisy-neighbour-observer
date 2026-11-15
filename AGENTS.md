@@ -29,6 +29,8 @@ The `Makefile` is the source of truth for which checks must pass.
 | `make helm-validate` | Lint the chart and validate each rendered scenario (kubeconform when installed) |
 | `make helm-version-check` | Require a chart version bump when the chart changes (`BASE=origin/main`) |
 | `make kind-up` / `make kind-test` / `make kind-down` | Install the chart in a two node kind cluster, run the e2e assertions, delete the cluster |
+| `make kind-dashboard` | Install VictoriaMetrics and Grafana in the kind cluster and check each dashboard query |
+| `make dashboard-lint` / `make dashboard-fmt` | Lint the dashboard with the pinned `dashboard-linter`, or normalise its JSON with `jq -S` |
 
 ## Repository map
 
@@ -54,8 +56,9 @@ observer/                 # agent library and binary (noisy-neighbour-observer)
   src/routes.rs           # /metrics, /healthz, /version
   tests/runqueue.rs       # integration test, ignored by default
 helm/noisy-neighbour-observer/  # DaemonSet chart
-deploy/local/             # kind cluster config and CPU bound workloads for the e2e test
-scripts/                  # install-ebpf-toolchain.sh, helm-validate.sh, helm-version-check.sh, kind-local.sh
+deploy/dashboard/         # Grafana dashboard JSON, its README and the linter exclusions
+deploy/local/             # kind cluster config, CPU bound workloads and the dashboard stack
+scripts/                  # install-ebpf-toolchain.sh, helm-*.sh, dashboard-lint.sh, kind-local.sh
 Dockerfile                # static musl image on distroless
 ```
 

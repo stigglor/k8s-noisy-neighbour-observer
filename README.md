@@ -4,7 +4,7 @@ A Kubernetes DaemonSet agent that finds noisy neighbours. It measures the run qu
 
 ## Status
 
-The agent measures run queue latency with eBPF and exports one histogram for each workload on the node. It also exports the wait of each workload by cause and by culprit workload. A dashboard comes in a later change.
+The agent measures run queue latency with eBPF and exports one histogram for each workload on the node. It also exports the wait of each workload by cause and by culprit workload. The Grafana dashboard in [`deploy/dashboard`](./deploy/dashboard/README.md) reads these metrics.
 
 ## Usage
 
