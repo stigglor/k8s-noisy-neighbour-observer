@@ -9,12 +9,14 @@ on:
       - "scripts/helm-validate.sh"
       - "scripts/helm-version-check.sh"
       - ".github/workflows/helm.yml"
+      - ".github/actions/setup-helm/**"
   pull_request:
     paths:
       - "helm/**"
       - "scripts/helm-validate.sh"
       - "scripts/helm-version-check.sh"
       - ".github/workflows/helm.yml"
+      - ".github/actions/setup-helm/**"
 
 # Least privilege: the job only reads the repo.
 permissions:
@@ -22,9 +24,6 @@ permissions:
 
 env:
   # Pinned kubeconform release and the sha256 of its linux-amd64 archive.
-  # Pinned helm, so the schema error text that helm-validate.sh matches stays the same.
-  HELM_VERSION: v4.2.0
-  HELM_SHA256: 97dbeb971be4ac4b27e3839976d9564c0fb35c6f3b1da89dd1e292d236af4096
   KUBECONFORM_VERSION: v0.8.0
   KUBECONFORM_SHA256: 9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883
 
@@ -38,13 +37,7 @@ jobs:
           # Full history, so the version check can diff against the base branch.
           fetch-depth: 0
 
-      - name: Install helm (${{ env.HELM_VERSION }})
-        run: |
-          curl -fsSLo helm.tar.gz "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz"
-          echo "${HELM_SHA256}  helm.tar.gz" | sha256sum -c -
-          tar -xzf helm.tar.gz linux-amd64/helm
-          sudo install -m 0755 linux-amd64/helm /usr/local/bin/helm
-          helm version
+      - uses: ./.github/actions/setup-helm
 
       - name: Install kubeconform (${{ env.KUBECONFORM_VERSION }})
         run: |

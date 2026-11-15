@@ -29,20 +29,28 @@ Both amd64 and arm64 nodes are supported. One image covers both, so a cluster wi
 
 ## Install
 
+Install a released chart from GHCR:
+
 ```bash
-helm install noisy-neighbour-observer ./helm/noisy-neighbour-observer \
-  --namespace noisy-neighbour-observer --create-namespace \
-  --set image.repository=<registry>/noisy-neighbour-observer \
-  --set image.tag=<tag>
+helm install nno oci://ghcr.io/stigglor/charts/noisy-neighbour-observer \
+  --version <version> \
+  --namespace nno-system --create-namespace
+```
+
+The chart installs the image of the same release by default. To install from a checkout, run `helm install nno ./helm/noisy-neighbour-observer`.
+
+Each release signs the image and the chart with cosign through the GitHub OIDC identity of the release workflow. Verify both before you install:
+
+```bash
+identity='^https://github.com/stigglor/k8s-noisy-neighbour-observer/\.github/workflows/release\.yml@refs/tags/v.+$'
+issuer=https://token.actions.githubusercontent.com
+cosign verify ghcr.io/stigglor/k8s-noisy-neighbour-observer:<version> \
+  --certificate-identity-regexp "$identity" --certificate-oidc-issuer "$issuer"
+cosign verify ghcr.io/stigglor/charts/noisy-neighbour-observer:<version> \
+  --certificate-identity-regexp "$identity" --certificate-oidc-issuer "$issuer"
 ```
 
 Then set up the scrape (see [Scrape](#scrape)).
-
-## Required inputs
-
-| Value | Why |
-|---|---|
-| `image.repository` | No default. No image is published yet. |
 
 ## Node coverage
 
@@ -138,7 +146,7 @@ Two ways to scrape:
 
 | Value | Default | Notes |
 |---|---|---|
-| `image.repository` | `""` | Required. |
+| `image.repository` | `ghcr.io/stigglor/k8s-noisy-neighbour-observer` | |
 | `image.tag` | `""` | Empty means the chart `appVersion`. |
 | `image.pullPolicy` | `IfNotPresent` | |
 | `imagePullSecrets` | `[]` | |

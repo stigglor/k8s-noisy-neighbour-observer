@@ -26,7 +26,14 @@ Build the container image:
 make docker-build
 ```
 
-Deploy the agent to a cluster with the Helm chart in [`helm/noisy-neighbour-observer`](./helm/noisy-neighbour-observer/README.md). Its README lists the node requirements and the supported environments.
+Install the agent in a cluster with the Helm chart from GHCR:
+
+```
+helm install nno oci://ghcr.io/stigglor/charts/noisy-neighbour-observer \
+  --version <version> -n nno-system --create-namespace
+```
+
+The chart README in [`helm/noisy-neighbour-observer`](./helm/noisy-neighbour-observer/README.md) lists the node requirements and the supported environments. It also shows how to verify the cosign signatures of the image and the chart.
 
 The agent reads these environment variables:
 
