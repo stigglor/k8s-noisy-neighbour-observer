@@ -98,7 +98,8 @@ Toggles for a node that blocks the agent with the defaults. All are off by defau
 - The pair map takes `config.maxPairs x (16 + 8 x CPUs)` bytes: about 25 MB at 16384 pairs on a 192 vCPU node.
 - The task map takes about 1.3 MB on any node.
 - With the defaults, the maps take about 49 MB on a 192 vCPU node, and about 6 MB on a 16 vCPU node. The process takes about 30 MB.
-- The 160Mi limit holds the maps of a 192 vCPU node and the process. The 64Mi request covers a node of up to about 128 vCPU.
+- The 96Mi request holds the maps and the process on a 192 vCPU node, about 79 MB. So the scheduler places the agent only where that memory is free.
+- The 160Mi limit adds headroom above the request for a spike at startup.
 - The agent exports the size of each map as `noisy_neighbour_map_bytes`.
 - Raise `resources.limits.memory` when you raise `config.maxCgroups` or `config.maxPairs`.
 
@@ -172,7 +173,7 @@ Two ways to scrape:
 | `podSecurityContext` | `{}` | |
 | `priorityClassName` | `system-node-critical` | See [Priority class](#priority-class). |
 | `priorityClassQuota.create` | `true` | See [Priority class](#priority-class). |
-| `resources` | 50m CPU, 64Mi memory request, 160Mi memory limit | See [Resources](#resources). |
+| `resources` | 50m CPU, 96Mi memory request, 160Mi memory limit | See [Resources](#resources). |
 | `startupProbe` / `livenessProbe` / `readinessProbe` | `/healthz` | See [Probes](#probes). |
 | `terminationGracePeriodSeconds` | `10` | |
 | `updateStrategy` | `RollingUpdate`, `maxUnavailable: 10%` | |

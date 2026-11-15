@@ -94,13 +94,13 @@ priorityClassQuota:
   create: true
 
 # -- CPU request and memory request and limit. No CPU limit, because CFS throttle would add
-# run queue wait to the agent that measures it. The limit must hold the BPF maps, which grow
-# with maxCgroups, maxPairs and the CPU count (about 49 MB on 192 vCPU), plus about 30 MB for
-# the process. See the chart README.
+# run queue wait to the agent that measures it. The memory request must hold the BPF maps,
+# which grow with maxCgroups, maxPairs and the CPU count, plus the process on the largest
+# node. The limit adds headroom above that. See the chart README.
 resources:
   requests:
     cpu: 50m
-    memory: 64Mi
+    memory: 96Mi
   limits:
     memory: 160Mi
 
