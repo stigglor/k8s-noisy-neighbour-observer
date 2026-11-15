@@ -64,7 +64,7 @@ Dockerfile                # static musl image on distroless
 
 ## Release
 
-A tag `vX.Y.Z` runs `.github/workflows/release.yml`. It pushes and signs the image and the chart to GHCR.
+A tag `vX.Y.Z` runs `.github/workflows/release.yml`. It pushes and signs the image and the chart to GHCR. Then it creates the GitHub release `vX.Y.Z`, with the install and verify commands for the two digests and notes generated from the merged pull requests.
 
 1. Set `version` and `appVersion` in `Chart.yaml`, and `version` in `observer/Cargo.toml`, to `X.Y.Z` in a PR. Merge it.
 2. Tag `vX.Y.Z` on main.

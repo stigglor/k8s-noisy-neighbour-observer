@@ -58,6 +58,8 @@ jobs:
 
   image:
     name: image (amd64, arm64)
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     needs: chart-version
     # A manual run skips chart-version, and that must not skip the image.
     if: ${{ !failure() && !cancelled() }}
@@ -120,6 +122,8 @@ jobs:
 
   chart:
     name: chart
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
     needs: image
     # A skipped chart-version on a manual run must not skip the chart dry run.
     if: ${{ !failure() && !cancelled() }}
@@ -181,3 +185,51 @@ jobs:
         env:
           DIGEST: ${{ steps.push.outputs.digest }}
         run: cosign sign --yes "${CHART_REGISTRY#oci://}/${CHART_NAME}@${DIGEST}"
+
+  # The release page names the digests and the commands that install and verify this version.
+  github-release:
+    name: github release
+    needs: [image, chart]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          IMAGE_DIGEST: ${{ needs.image.outputs.digest }}
+          CHART_DIGEST: ${{ needs.chart.outputs.digest }}
+        run: |
+          version="${TAG#v}"
+          identity="^https://github.com/${GH_REPO}/\\.github/workflows/release\\.yml@refs/tags/v.+\$"
+          cat >notes.md <<NOTES
+          ## Install
+
+          \`\`\`bash
+          helm install nno ${CHART_REGISTRY}/${CHART_NAME} --version ${version} \\
+            --namespace nno-system --create-namespace
+          \`\`\`
+
+          | Artefact | Reference |
+          |---|---|
+          | Image | \`${IMAGE}:${version}\` (\`${IMAGE_DIGEST}\`) |
+          | Chart | \`${CHART_REGISTRY}/${CHART_NAME}\` ${version} (\`${CHART_DIGEST}\`) |
+
+          ## Verify
+
+          Use cosign 3.0 or newer.
+
+          \`\`\`bash
+          identity='${identity}'
+          issuer=https://token.actions.githubusercontent.com
+          cosign verify ${IMAGE}@${IMAGE_DIGEST} \\
+            --certificate-identity-regexp "\$identity" --certificate-oidc-issuer "\$issuer"
+          cosign verify ${CHART_REGISTRY#oci://}/${CHART_NAME}@${CHART_DIGEST} \\
+            --certificate-identity-regexp "\$identity" --certificate-oidc-issuer "\$issuer"
+          \`\`\`
+          NOTES
+          gh release create "$TAG" --verify-tag --title "$TAG" --notes-file notes.md --generate-notes
