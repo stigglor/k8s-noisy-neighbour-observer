@@ -27,7 +27,7 @@ The `Makefile` is the source of truth for which checks must pass.
 | `make docker-build` | Build the image for one platform (`PLATFORM=` `IMAGE=`) |
 | `make preflight` | Check that the docker engine kernel has BTF and cgroup v2 |
 | `make helm-validate` | Lint the chart and validate each rendered scenario (kubeconform when installed) |
-| `make helm-version-check` | Require a chart version bump when the chart changes (`BASE=origin/main`) |
+| `make helm-version-check` | Require a chart version above the latest release tag when the chart changed since it (`BASE=<ref>` overrides) |
 | `make kind-up` / `make kind-test` / `make kind-down` | Install the chart in a two node kind cluster, run the e2e assertions, delete the cluster |
 | `make kind-dashboard` | Install VictoriaMetrics and Grafana in the kind cluster and check each dashboard query |
 | `make dashboard-lint` / `make dashboard-fmt` | Lint the dashboard with the pinned `dashboard-linter`, or normalise its JSON with `jq -S` |

@@ -187,7 +187,7 @@ Two ways to scrape:
 
 ## Versions
 
-- `Chart.yaml` `version` is the chart version (SemVer). Bump it on each change to templates or values. `make helm-version-check` enforces it.
+- `Chart.yaml` `version` is the chart version (SemVer). After a release, set it above the released version in the first change to templates or values. `make helm-version-check` enforces it against the latest `v*` tag.
 - `Chart.yaml` `appVersion` is the image tag that the chart deploys when `image.tag` is empty.
 
 ## Test

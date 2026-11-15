@@ -70,7 +70,7 @@ helm-validate: ## Lint the chart and validate each rendered scenario (kubeconfor
 	scripts/helm-validate.sh
 
 .PHONY: helm-version-check
-helm-version-check: ## Require a chart version bump when the chart changes (BASE=origin/main)
+helm-version-check: ## Require a chart version above the last release when the chart changed (BASE=<ref>)
 	scripts/helm-version-check.sh
 
 .PHONY: dashboard-lint
