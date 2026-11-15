@@ -70,7 +70,7 @@ Name of the service account to use.
 {{- end }}
 
 {{/*
-Image reference. The schema requires the repository, since no image is published yet.
+Image reference. The tag defaults to the chart appVersion.
 */}}
 {{- define "noisy-neighbour-observer.image" -}}
 {{- printf "%s:%s" .Values.image.repository (default .Chart.AppVersion .Values.image.tag) -}}

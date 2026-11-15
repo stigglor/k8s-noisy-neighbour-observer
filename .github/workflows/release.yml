@@ -1,0 +1,183 @@
+name: release
+
+# A version tag publishes the image and the chart to GHCR. A manual run builds both, and
+# with push=true it pushes only the image under its sha tag, so no chart version is used up.
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      push:
+        description: Push and sign the artefacts, not only build them
+        type: boolean
+        default: false
+
+# Least privilege: each job adds only what it needs.
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/stigglor/k8s-noisy-neighbour-observer
+  CHART_REGISTRY: oci://ghcr.io/stigglor/charts
+  CHART_NAME: noisy-neighbour-observer
+  PUSH: ${{ github.ref_type == 'tag' || inputs.push }}
+  RELEASE: ${{ github.ref_type == 'tag' }}
+
+jobs:
+  # Fails a bad tag before anything is public, so no release is half done.
+  chart-version:
+    name: versions match the tag
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: ./.github/actions/setup-helm
+
+      # Release vX.Y.Z ships chart version X.Y.Z, the image X.Y.Z as the default, and a binary
+      # that reports X.Y.Z, so one version names everything.
+      - name: Require the versions of the tag
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: scripts/release-chart.sh versions "helm/${CHART_NAME}" "${REF_NAME#v}"
+
+      - name: Log in to GHCR with helm
+        env:
+          ACTOR: ${{ github.actor }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: helm registry login ghcr.io --username "$ACTOR" --password-stdin <<<"$TOKEN"
+
+      - name: Require a new chart version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: scripts/release-chart.sh check "helm/${CHART_NAME}" "${CHART_REGISTRY}"
+
+  image:
+    name: image (amd64, arm64)
+    needs: chart-version
+    # A manual run skips chart-version, and that must not skip the image.
+    if: ${{ !failure() && !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+      # The cosign keyless signature uses the OIDC token of the run.
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR
+        if: env.PUSH == 'true'
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The tags are 1.2.3, 1.2 and the commit sha. A manual run gets the sha only.
+      - name: Image tags
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.IMAGE }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=,format=long
+
+      - name: Build image
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ env.PUSH == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: NNO_GIT_SHA=${{ github.sha }}
+          provenance: mode=max
+          sbom: true
+          # Its own scope, so the multi arch release cache and the CI cache do not evict each other.
+          cache-from: type=gha,scope=release
+          cache-to: type=gha,scope=release,mode=max
+
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+        if: env.PUSH == 'true'
+
+      - name: Sign the image digest
+        if: env.PUSH == 'true'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+
+  chart:
+    name: chart
+    needs: image
+    # A skipped chart-version on a manual run must not skip the chart dry run.
+    if: ${{ !failure() && !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: ./.github/actions/setup-helm
+
+      # The app version is the image tag. A tag run uses the semver, a manual run uses the commit sha.
+      - name: Package the chart
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          app_version="$SHA"
+          if [ "$REF_TYPE" = tag ]; then app_version="${REF_NAME#v}"; fi
+          helm package "helm/${CHART_NAME}" --app-version "$app_version" --destination dist
+          ls dist
+
+      - name: Log in to GHCR
+        if: env.RELEASE == 'true'
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to GHCR with helm
+        if: env.RELEASE == 'true'
+        env:
+          ACTOR: ${{ github.actor }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: helm registry login ghcr.io --username "$ACTOR" --password-stdin <<<"$TOKEN"
+
+      # Chart versions are immutable. The check runs again because a run can race another tag.
+      - name: Require a new chart version
+        if: env.RELEASE == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: scripts/release-chart.sh check dist "${CHART_REGISTRY}"
+
+      - name: Push the chart
+        id: push
+        if: env.RELEASE == 'true'
+        run: scripts/release-chart.sh push dist "${CHART_REGISTRY}"
+
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+        if: env.RELEASE == 'true'
+
+      - name: Sign the chart digest
+        if: env.RELEASE == 'true'
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: cosign sign --yes "${CHART_REGISTRY#oci://}/${CHART_NAME}@${DIGEST}"

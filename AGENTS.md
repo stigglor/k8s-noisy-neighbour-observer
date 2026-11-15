@@ -58,9 +58,24 @@ observer/                 # agent library and binary (noisy-neighbour-observer)
 helm/noisy-neighbour-observer/  # DaemonSet chart
 deploy/dashboard/         # Grafana dashboard JSON, its README and the linter exclusions
 deploy/local/             # kind cluster config, CPU bound workloads and the dashboard stack
-scripts/                  # install-ebpf-toolchain.sh, helm-*.sh, dashboard-lint.sh, kind-local.sh
+scripts/                  # install-ebpf-toolchain.sh, helm-*.sh, release-chart.sh, dashboard-lint.sh, kind-local.sh
 Dockerfile                # static musl image on distroless
 ```
+
+## Release
+
+A tag `vX.Y.Z` runs `.github/workflows/release.yml`. It pushes and signs the image and the chart to GHCR.
+
+1. Set `version` and `appVersion` in `Chart.yaml`, and `version` in `observer/Cargo.toml`, to `X.Y.Z` in a PR. Merge it.
+2. Tag `vX.Y.Z` on main.
+3. Push the tag.
+4. Verify with `cosign verify` (see the chart README) and `helm install oci://ghcr.io/stigglor/charts/noisy-neighbour-observer --version X.Y.Z`.
+
+The workflow stops before it publishes anything if one of the three versions is not `X.Y.Z`, or if chart version `X.Y.Z` exists.
+
+A new GHCR package is private. Set the image package and the chart package to public once, after the first release.
+
+To test the workflow without a release, run it by hand. With `push` true, it pushes only the image under its commit sha tag.
 
 ## Invariants
 

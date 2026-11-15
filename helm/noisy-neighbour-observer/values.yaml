@@ -2,8 +2,8 @@
 # The defaults place one agent on every Linux node in every node pool.
 
 image:
-  # -- Container image repository. REQUIRED, the chart has no default yet.
-  repository: ""
+  # -- Container image repository.
+  repository: ghcr.io/stigglor/k8s-noisy-neighbour-observer
   # -- Image tag. Empty means the chart appVersion.
   tag: ""
   pullPolicy: IfNotPresent

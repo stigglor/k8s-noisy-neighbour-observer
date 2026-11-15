@@ -7,8 +7,6 @@ cd "$(dirname "$0")/.."
 
 CHART="${CHART:-helm/noisy-neighbour-observer}"
 KUBERNETES_VERSION="${KUBERNETES_VERSION:-1.34.0}"
-# The schema requires an image. A scenario can override it with a later --set.
-REQUIRED=(--set image.repository=ci.example.com/noisy-neighbour-observer)
 
 command -v helm >/dev/null || { echo "helm is required (https://helm.sh/docs/intro/install/)"; exit 1; }
 
@@ -21,7 +19,7 @@ else
     kc() { cat >/dev/null; }
 fi
 
-render() { helm template ci "$CHART" --namespace nno "${REQUIRED[@]}" "$@"; }
+render() { helm template ci "$CHART" --namespace nno "$@"; }
 
 # A render is captured in a variable before grep, because grep -q closes the pipe early and
 # pipefail would then report the SIGPIPE of helm.
@@ -41,11 +39,18 @@ reject() {
 }
 
 echo "==> helm lint ($CHART)"
-helm lint "$CHART" --strict "${REQUIRED[@]}"
+helm lint "$CHART" --strict
 
 echo "==> scenario: default"
 render | kc
 default_rendered="$(render)"
+
+echo "==> scenario: the default image is the published image at the chart appVersion"
+app_version="$(awk -F'[ "]+' '/^appVersion:/{print $2; exit}' "$CHART/Chart.yaml")"
+expect "$default_rendered" "image: \"?ghcr.io/stigglor/k8s-noisy-neighbour-observer:${app_version}\"?$" \
+    "the default image is not the published image at the appVersion"
+expect "$(render --set image.repository=ci.example.com/nno --set image.tag=dev)" \
+    'image: "?ci.example.com/nno:dev"?$' "an image override does not apply"
 
 echo "==> scenario: the default has no CPU limit"
 # Prints the lines indented below each limits: key.
@@ -111,7 +116,7 @@ render \
     --set config.seriesBudget=24 | kc
 
 echo "==> scenario: kube-system needs no quota"
-if helm template ci "$CHART" --namespace kube-system "${REQUIRED[@]}" | grep -q 'kind: ResourceQuota'; then
+if helm template ci "$CHART" --namespace kube-system | grep -q 'kind: ResourceQuota'; then
     echo "FAIL: the chart renders a priority class quota in kube-system"
     exit 1
 fi
@@ -131,8 +136,8 @@ expect "$(render --show-only templates/rbac.yaml)" 'name: ci-noisy-neighbour-obs
 
 echo "==> scenario: long names keep the namespace in cluster scoped names"
 long=(--set fullnameOverride=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --show-only templates/rbac.yaml)
-prod="$(helm template ci "$CHART" --namespace observability-prod "${REQUIRED[@]}" "${long[@]}")"
-staging="$(helm template ci "$CHART" --namespace observability-staging "${REQUIRED[@]}" "${long[@]}")"
+prod="$(helm template ci "$CHART" --namespace observability-prod "${long[@]}")"
+staging="$(helm template ci "$CHART" --namespace observability-staging "${long[@]}")"
 expect "$prod" 'name: a+-observability-prod$' "a long name cut the namespace from the ClusterRole name"
 expect "$staging" 'name: a+-observability-staging$' "a long name cut the namespace from the ClusterRole name"
 
@@ -146,7 +151,7 @@ expect "$merged" 'app.kubernetes.io/component: "custom"' "the user label did not
 
 echo "==> scenario: invalid values are rejected"
 reject "privileged and seLinux.type" "bottlerocket#3791" --set privileged=true --set seLinux.type=spc_t
-reject "no image.repository" "/image/repository" --set image.repository=
+reject "an empty image.repository" "/image/repository" --set image.repository=
 reject "an unknown granularity" "/config/granularity" --set config.granularity=node
 reject "a zero read interval" "/config/readInterval" --set config.readInterval=0s
 reject "a misspelled value key" "additional properties 'enable'" --set podMonitor.enable=true

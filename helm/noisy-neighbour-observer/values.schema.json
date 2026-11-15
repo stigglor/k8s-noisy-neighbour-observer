@@ -11,14 +11,11 @@
   "properties": {
     "image": {
       "type": "object",
-      "required": [
-        "repository"
-      ],
       "properties": {
         "repository": {
           "type": "string",
           "minLength": 1,
-          "description": "Container image repository (required)."
+          "description": "Container image repository."
         },
         "tag": {
           "type": "string",
