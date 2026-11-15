@@ -307,4 +307,21 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn counter_names_end_in_total_once() {
+        let metrics = Metrics::new(&[Duration::from_millis(1)]);
+        metrics
+            .dropped_samples
+            .get_or_create(&MapLabels { map: "runq" })
+            .inc_by(3);
+
+        let mut body = String::new();
+        encode(&mut body, &registry(&metrics)).unwrap();
+        let line = r#"noisy_neighbour_dropped_samples_total{map="runq"} 3"#;
+        assert!(
+            body.lines().any(|l| l == line),
+            "missing {line:?} in\n{body}"
+        );
+    }
 }
