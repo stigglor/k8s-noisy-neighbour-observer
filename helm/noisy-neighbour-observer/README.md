@@ -39,7 +39,9 @@ helm install nno oci://ghcr.io/stigglor/charts/noisy-neighbour-observer \
 
 The chart installs the image of the same release by default. To install from a checkout, run `helm install nno ./helm/noisy-neighbour-observer`.
 
-Each release signs the image and the chart with cosign through the GitHub OIDC identity of the release workflow. Verify both before you install:
+Each release signs the image and the chart with cosign through the GitHub OIDC identity of the release workflow. Verify both before you install.
+
+Use cosign 3.0 or newer ([install cosign](https://docs.sigstore.dev/cosign/system_config/installation/)). The release signs in the Sigstore bundle format. cosign 2 does not read that format and reports `no signatures found`.
 
 ```bash
 identity='^https://github.com/stigglor/k8s-noisy-neighbour-observer/\.github/workflows/release\.yml@refs/tags/v.+$'
