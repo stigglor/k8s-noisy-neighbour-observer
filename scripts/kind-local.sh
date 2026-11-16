@@ -269,15 +269,42 @@ series_count() {
 }
 
 # Prints one line for each panel target: pass, FAIL, or "no source" when the query is empty and
-# its cAdvisor or node exporter metric has no series at all.
+# its node exporter metric has no series at all.
 dashboard_check() {
     local panel ref expr count source status
     while IFS=$'\t' read -r panel ref expr; do
         count="$(series_count "$expr")" || count=""
-        source="$(grep -oE '(container|node)_[a-z_]+_total' <<<"$expr" | head -1)" || true
+        source="$(grep -oE 'node_[a-z_]+_total' <<<"$expr" | head -1)" || true
         if [ -n "$count" ] && [ "$count" -gt 0 ]; then
             status=pass
         elif [ "$count" = 0 ] && [ -n "$source" ] && [ "$(series_count "count($source)")" = 0 ]; then
+            status="no source"
+        else
+            status=FAIL
+        fi
+        printf '%-10s %-48s %s\n' "$status" "$panel" "$ref"
+    done < <(dashboard_targets "$1")
+}
+
+# Prints one line for each panel target, run through Grafana and its VictoriaMetrics plugin: pass,
+# FAIL on a query error or an empty result, or "no source" for an empty result of a node exporter
+# metric with no series. $1 is the node.
+dashboard_plugin_check() {
+    local panel ref expr body response err frames source status
+    while IFS=$'\t' read -r panel ref expr; do
+        body="$(jq -nc --arg expr "$expr" '{from: "now-10m", to: "now", queries: [{refId: "A",
+            datasource: {type: "victoriametrics-metrics-datasource", uid: "victoria-metrics"},
+            expr: $expr, instant: true, interval: "15s"}]}')"
+        response="$(kctl -n "$DASHBOARD_NS" exec -i deploy/grafana -- curl -s -X POST \
+            -H 'Content-Type: application/json' -d @- localhost:3000/api/ds/query <<<"$body" 2>&1)" || response='{}'
+        err="$(jq -r '.results.A.error // empty' <<<"$response" 2>/dev/null || echo unparsable)"
+        frames="$(jq -r '[.results.A.frames[]?.data.values[0] | length] | add // 0' <<<"$response" 2>/dev/null || echo 0)"
+        source="$(grep -oE 'node_[a-z_]+_total' <<<"$expr" | head -1)" || true
+        if [ -n "$err" ]; then
+            status=FAIL
+        elif [ "$frames" -gt 0 ]; then
+            status=pass
+        elif [ -n "$source" ] && [ "$(series_count "count($source)")" = 0 ]; then
             status="no source"
         else
             status=FAIL
@@ -323,7 +350,7 @@ dashboard() {
 
     local node
     node="$(kctl get nodes -l '!node-role.kubernetes.io/control-plane' -o jsonpath='{.items[0].metadata.name}')"
-    echo "==> every panel query returns data for workload=spin, namespace=$WORKLOADS_NS, node=$node, cluster=.*"
+    echo "==> every panel query returns data for workload=spin, namespace=$WORKLOADS_NS, node=$node, kubernetes_cluster_name=.*"
     # The rate interval needs 2 scrapes in its window, and new series need a few more.
     local results deadline=$((SECONDS + 240))
     until results="$(dashboard_check "$node")" && ! grep -q '^FAIL' <<<"$results"; do
@@ -336,11 +363,23 @@ dashboard() {
     printf '%-10s %-48s %s\n' STATUS PANEL REF
     echo "$results"
 
+    echo "==> every panel query runs through Grafana and the VictoriaMetrics plugin"
+    deadline=$((SECONDS + 120))
+    until results="$(dashboard_plugin_check "$node")" && ! grep -q '^FAIL' <<<"$results"; do
+        if [ "$SECONDS" -ge "$deadline" ]; then
+            echo "$results"
+            fail "some panel queries fail in Grafana"
+        fi
+        sleep 10
+    done
+    printf '%-10s %-48s %s\n' STATUS PANEL REF
+    echo "$results"
+
     echo "==> the variables list the e2e values"
     local label want got
-    for label in cluster namespace workload node; do
+    for label in kubernetes_cluster_name namespace workload node; do
         case "$label" in
-            cluster) want="$CLUSTER" ;;
+            kubernetes_cluster_name) want="$CLUSTER" ;;
             namespace) want="$WORKLOADS_NS" ;;
             workload) want="spin" ;;
             node) want="$node" ;;
