@@ -66,7 +66,7 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
+        "type": "victoriametrics-metrics-datasource",
         "uid": "${datasource}"
       },
       "description": "The highest p99 run queue wait of a workload on a node, in each cluster. The synthetic `_system` and `_overflow` entities do not count. Amber starts at 100 µs and red at 1 ms.",
@@ -121,13 +121,13 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
+            "type": "victoriametrics-metrics-datasource",
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "max by (cluster) (histogram_quantile(0.99, sum by (cluster, node, namespace, workload_kind, workload, le) (rate(noisy_neighbour_runqueue_latency_seconds_bucket{cluster=~\"$cluster\", namespace!~\"_.*\"}[$__rate_interval]))))",
+          "expr": "max by (kubernetes_cluster_name) (histogram_quantile(0.99, sum by (kubernetes_cluster_name, node, namespace, workload_kind, workload, le) (rate(noisy_neighbour_runqueue_latency_seconds_bucket{kubernetes_cluster_name=~\"$cluster\", namespace!~\"_.*\"}[$__rate_interval]))))",
           "instant": false,
-          "legendFormat": "{{cluster}}",
+          "legendFormat": "{{kubernetes_cluster_name}}",
           "range": true,
           "refId": "A"
         }
@@ -137,7 +137,7 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
+        "type": "victoriametrics-metrics-datasource",
         "uid": "${datasource}"
       },
       "description": "The number of workloads with a p99 run queue wait above 1 ms on a node. A workload counts once for each node. The synthetic `_system` and `_overflow` entities do not count.",
@@ -188,11 +188,11 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
+            "type": "victoriametrics-metrics-datasource",
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "count(histogram_quantile(0.99, sum by (cluster, node, namespace, workload_kind, workload, le) (rate(noisy_neighbour_runqueue_latency_seconds_bucket{cluster=~\"$cluster\", namespace!~\"_.*\"}[$__rate_interval]))) > 0.001) or vector(0)",
+          "expr": "count(histogram_quantile(0.99, sum by (kubernetes_cluster_name, node, namespace, workload_kind, workload, le) (rate(noisy_neighbour_runqueue_latency_seconds_bucket{kubernetes_cluster_name=~\"$cluster\", namespace!~\"_.*\"}[$__rate_interval]))) > 0.001) or vector(0)",
           "instant": false,
           "legendFormat": "workloads",
           "range": true,
@@ -204,7 +204,7 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
+        "type": "victoriametrics-metrics-datasource",
         "uid": "${datasource}"
       },
       "description": "The share of all run queue wait in each cluster with the cause `other_workload`. A neighbour held the CPU for this share. The synthetic `_system` and `_overflow` entities do not count.",
@@ -251,13 +251,13 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
+            "type": "victoriametrics-metrics-datasource",
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum by (cluster) (rate(noisy_neighbour_runqueue_wait_by_cause_seconds_total{cluster=~\"$cluster\", namespace!~\"_.*\", cause=\"other_workload\"}[$__rate_interval])) / sum by (cluster) (rate(noisy_neighbour_runqueue_latency_seconds_sum{cluster=~\"$cluster\", namespace!~\"_.*\"}[$__rate_interval]))",
+          "expr": "sum by (kubernetes_cluster_name) (rate(noisy_neighbour_runqueue_wait_by_cause_seconds_total{kubernetes_cluster_name=~\"$cluster\", namespace!~\"_.*\", cause=\"other_workload\"}[$__rate_interval])) / sum by (kubernetes_cluster_name) (rate(noisy_neighbour_runqueue_latency_seconds_sum{kubernetes_cluster_name=~\"$cluster\", namespace!~\"_.*\"}[$__rate_interval]))",
           "instant": false,
-          "legendFormat": "{{cluster}}",
+          "legendFormat": "{{kubernetes_cluster_name}}",
           "range": true,
           "refId": "A"
         }
@@ -280,7 +280,7 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
+        "type": "victoriametrics-metrics-datasource",
         "uid": "${datasource}"
       },
       "description": "The workloads ranked by their worst p99 run queue wait in the time range, with the mean wait. Both sum the nodes of a workload. Click a workload to select it. Amber starts at 100 µs and red at 1 ms.",
@@ -396,7 +396,7 @@
                 "value": [
                   {
                     "title": "Select this workload",
-                    "url": "/d/noisy-neighbour/noisy-neighbour?${datasource:queryparam}&var-cluster=${__data.fields.cluster}&var-namespace=${__data.fields.namespace}&var-workload=${__data.fields.workload}&${node:queryparam}&${__url_time_range}"
+                    "url": "/d/noisy-neighbour/noisy-neighbour?${datasource:queryparam}&var-cluster=${__data.fields.kubernetes_cluster_name}&var-namespace=${__data.fields.namespace}&var-workload=${__data.fields.workload}&${node:queryparam}&${__url_time_range}"
                   }
                 ]
               }
@@ -424,11 +424,11 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
+            "type": "victoriametrics-metrics-datasource",
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "max_over_time(histogram_quantile(0.99, sum by (cluster, namespace, workload_kind, workload, le) (rate(noisy_neighbour_runqueue_latency_seconds_bucket{cluster=~\"$cluster\", namespace=~\"$namespace\", node=~\"$node\"}[$__rate_interval])))[$__range:])",
+          "expr": "max_over_time(histogram_quantile(0.99, sum by (kubernetes_cluster_name, namespace, workload_kind, workload, le) (rate(noisy_neighbour_runqueue_latency_seconds_bucket{kubernetes_cluster_name=~\"$cluster\", namespace=~\"$namespace\", node=~\"$node\"}[$__rate_interval])))[$__range:])",
           "format": "table",
           "instant": true,
           "legendFormat": "__auto",
@@ -437,11 +437,11 @@
         },
         {
           "datasource": {
-            "type": "prometheus",
+            "type": "victoriametrics-metrics-datasource",
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "avg_over_time((sum by (cluster, namespace, workload_kind, workload) (rate(noisy_neighbour_runqueue_latency_seconds_sum{cluster=~\"$cluster\", namespace=~\"$namespace\", node=~\"$node\"}[$__rate_interval])) / sum by (cluster, namespace, workload_kind, workload) (rate(noisy_neighbour_runqueue_latency_seconds_count{cluster=~\"$cluster\", namespace=~\"$namespace\", node=~\"$node\"}[$__rate_interval])))[$__range:])",
+          "expr": "avg_over_time((sum by (kubernetes_cluster_name, namespace, workload_kind, workload) (rate(noisy_neighbour_runqueue_latency_seconds_sum{kubernetes_cluster_name=~\"$cluster\", namespace=~\"$namespace\", node=~\"$node\"}[$__rate_interval])) / sum by (kubernetes_cluster_name, namespace, workload_kind, workload) (rate(noisy_neighbour_runqueue_latency_seconds_count{kubernetes_cluster_name=~\"$cluster\", namespace=~\"$namespace\", node=~\"$node\"}[$__rate_interval])))[$__range:])",
           "format": "table",
           "instant": true,
           "legendFormat": "__auto",
@@ -489,7 +489,7 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
+        "type": "victoriametrics-metrics-datasource",
         "uid": "${datasource}"
       },
       "description": "The nodes ranked by the worst p99 run queue wait of the selected workloads in the time range, with the mean wait. Click a node to select it. Amber starts at 100 µs and red at 1 ms.",
@@ -605,7 +605,7 @@
                 "value": [
                   {
                     "title": "Select this node",
-                    "url": "/d/noisy-neighbour/noisy-neighbour?${datasource:queryparam}&var-cluster=${__data.fields.cluster}&${namespace:queryparam}&${workload:queryparam}&var-node=${__data.fields.node}&${__url_time_range}"
+                    "url": "/d/noisy-neighbour/noisy-neighbour?${datasource:queryparam}&var-cluster=${__data.fields.kubernetes_cluster_name}&${namespace:queryparam}&${workload:queryparam}&var-node=${__data.fields.node}&${__url_time_range}"
                   }
                 ]
               }
@@ -633,11 +633,11 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
+            "type": "victoriametrics-metrics-datasource",
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "max_over_time(histogram_quantile(0.99, sum by (cluster, node, le) (rate(noisy_neighbour_runqueue_latency_seconds_bucket{cluster=~\"$cluster\", namespace=~\"$namespace\", workload=~\"$workload\"}[$__rate_interval])))[$__range:])",
+          "expr": "max_over_time(histogram_quantile(0.99, sum by (kubernetes_cluster_name, node, le) (rate(noisy_neighbour_runqueue_latency_seconds_bucket{kubernetes_cluster_name=~\"$cluster\", namespace=~\"$namespace\", workload=~\"$workload\"}[$__rate_interval])))[$__range:])",
           "format": "table",
           "instant": true,
           "legendFormat": "__auto",
@@ -646,11 +646,11 @@
         },
         {
           "datasource": {
-            "type": "prometheus",
+            "type": "victoriametrics-metrics-datasource",
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "avg_over_time((sum by (cluster, node) (rate(noisy_neighbour_runqueue_latency_seconds_sum{cluster=~\"$cluster\", namespace=~\"$namespace\", workload=~\"$workload\"}[$__rate_interval])) / sum by (cluster, node) (rate(noisy_neighbour_runqueue_latency_seconds_count{cluster=~\"$cluster\", namespace=~\"$namespace\", workload=~\"$workload\"}[$__rate_interval])))[$__range:])",
+          "expr": "avg_over_time((sum by (kubernetes_cluster_name, node) (rate(noisy_neighbour_runqueue_latency_seconds_sum{kubernetes_cluster_name=~\"$cluster\", namespace=~\"$namespace\", workload=~\"$workload\"}[$__rate_interval])) / sum by (kubernetes_cluster_name, node) (rate(noisy_neighbour_runqueue_latency_seconds_count{kubernetes_cluster_name=~\"$cluster\", namespace=~\"$namespace\", workload=~\"$workload\"}[$__rate_interval])))[$__range:])",
           "format": "table",
           "instant": true,
           "legendFormat": "__auto",
@@ -711,7 +711,7 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
+        "type": "victoriametrics-metrics-datasource",
         "uid": "${datasource}"
       },
       "description": "Run queue waits of the selected workloads per second, in the bucket of each wait. A move to the upper buckets means longer waits.",
@@ -774,11 +774,11 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
+            "type": "victoriametrics-metrics-datasource",
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum by (le) (rate(noisy_neighbour_runqueue_latency_seconds_bucket{cluster=~\"$cluster\", namespace=~\"$namespace\", workload=~\"$workload\", node=~\"$node\"}[$__rate_interval]))",
+          "expr": "sum by (le) (rate(noisy_neighbour_runqueue_latency_seconds_bucket{kubernetes_cluster_name=~\"$cluster\", namespace=~\"$namespace\", workload=~\"$workload\", node=~\"$node\"}[$__rate_interval]))",
           "format": "heatmap",
           "instant": false,
           "legendFormat": "{{le}}",
@@ -791,7 +791,7 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
+        "type": "victoriametrics-metrics-datasource",
         "uid": "${datasource}"
       },
       "description": "The mean run queue wait of the selected workloads. Amber starts at 100 µs and red at 1 ms.",
@@ -858,11 +858,11 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
+            "type": "victoriametrics-metrics-datasource",
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(rate(noisy_neighbour_runqueue_latency_seconds_sum{cluster=~\"$cluster\", namespace=~\"$namespace\", workload=~\"$workload\", node=~\"$node\"}[$__rate_interval])) / sum(rate(noisy_neighbour_runqueue_latency_seconds_count{cluster=~\"$cluster\", namespace=~\"$namespace\", workload=~\"$workload\", node=~\"$node\"}[$__rate_interval]))",
+          "expr": "sum(rate(noisy_neighbour_runqueue_latency_seconds_sum{kubernetes_cluster_name=~\"$cluster\", namespace=~\"$namespace\", workload=~\"$workload\", node=~\"$node\"}[$__rate_interval])) / sum(rate(noisy_neighbour_runqueue_latency_seconds_count{kubernetes_cluster_name=~\"$cluster\", namespace=~\"$namespace\", workload=~\"$workload\", node=~\"$node\"}[$__rate_interval]))",
           "instant": false,
           "legendFormat": "mean",
           "range": true,
@@ -874,7 +874,7 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
+        "type": "victoriametrics-metrics-datasource",
         "uid": "${datasource}"
       },
       "description": "The p50 and p99 run queue wait of the selected workloads. The histogram has 8 buckets by default, so these values are coarse. Use them to rank and to see a trend, not as exact values. Amber starts at 100 µs and red at 1 ms.",
@@ -941,11 +941,11 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
+            "type": "victoriametrics-metrics-datasource",
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.5, sum by (le) (rate(noisy_neighbour_runqueue_latency_seconds_bucket{cluster=~\"$cluster\", namespace=~\"$namespace\", workload=~\"$workload\", node=~\"$node\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(noisy_neighbour_runqueue_latency_seconds_bucket{kubernetes_cluster_name=~\"$cluster\", namespace=~\"$namespace\", workload=~\"$workload\", node=~\"$node\"}[$__rate_interval])))",
           "instant": false,
           "legendFormat": "p50",
           "range": true,
@@ -953,11 +953,11 @@
         },
         {
           "datasource": {
-            "type": "prometheus",
+            "type": "victoriametrics-metrics-datasource",
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(noisy_neighbour_runqueue_latency_seconds_bucket{cluster=~\"$cluster\", namespace=~\"$namespace\", workload=~\"$workload\", node=~\"$node\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(noisy_neighbour_runqueue_latency_seconds_bucket{kubernetes_cluster_name=~\"$cluster\", namespace=~\"$namespace\", workload=~\"$workload\", node=~\"$node\"}[$__rate_interval])))",
           "instant": false,
           "legendFormat": "p99",
           "range": true,
@@ -982,7 +982,7 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
+        "type": "victoriametrics-metrics-datasource",
         "uid": "${datasource}"
       },
       "description": "The share of the run queue wait of the selected workloads for each workload that held the CPU. `_other` sums the culprits with no series of their own. `_overflow` sums the workloads outside the series budget. The bars do not reach 100%, because idle and throttled wait has no culprit.",
@@ -1087,11 +1087,11 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
+            "type": "victoriametrics-metrics-datasource",
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum by (culprit_namespace, culprit_workload) (rate(noisy_neighbour_runqueue_wait_by_culprit_seconds_total{cluster=~\"$cluster\", namespace=~\"$namespace\", workload=~\"$workload\", node=~\"$node\"}[$__rate_interval])) / scalar(sum(rate(noisy_neighbour_runqueue_latency_seconds_sum{cluster=~\"$cluster\", namespace=~\"$namespace\", workload=~\"$workload\", node=~\"$node\"}[$__rate_interval])))",
+          "expr": "sum by (culprit_namespace, culprit_workload) (rate(noisy_neighbour_runqueue_wait_by_culprit_seconds_total{kubernetes_cluster_name=~\"$cluster\", namespace=~\"$namespace\", workload=~\"$workload\", node=~\"$node\"}[$__rate_interval])) / scalar(sum(rate(noisy_neighbour_runqueue_latency_seconds_sum{kubernetes_cluster_name=~\"$cluster\", namespace=~\"$namespace\", workload=~\"$workload\", node=~\"$node\"}[$__rate_interval])))",
           "instant": false,
           "legendFormat": "{{culprit_namespace}}/{{culprit_workload}}",
           "range": true,
@@ -1103,7 +1103,7 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
+        "type": "victoriametrics-metrics-datasource",
         "uid": "${datasource}"
       },
       "description": "The share of the run queue wait of the selected workloads for each cause:\n\n- `other_workload`: a neighbour held the CPU.\n- `same_workload`: another task of the same workload held the CPU.\n- `system`: a process outside the pods held the CPU.\n- `idle`: the wait ended on an idle CPU.\n- `throttled`: the CPU limit of the workload stopped it.",
@@ -1239,11 +1239,11 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
+            "type": "victoriametrics-metrics-datasource",
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum by (cause) (rate(noisy_neighbour_runqueue_wait_by_cause_seconds_total{cluster=~\"$cluster\", namespace=~\"$namespace\", workload=~\"$workload\", node=~\"$node\"}[$__rate_interval])) / scalar(sum(rate(noisy_neighbour_runqueue_latency_seconds_sum{cluster=~\"$cluster\", namespace=~\"$namespace\", workload=~\"$workload\", node=~\"$node\"}[$__rate_interval])))",
+          "expr": "sum by (cause) (rate(noisy_neighbour_runqueue_wait_by_cause_seconds_total{kubernetes_cluster_name=~\"$cluster\", namespace=~\"$namespace\", workload=~\"$workload\", node=~\"$node\"}[$__rate_interval])) / scalar(sum(rate(noisy_neighbour_runqueue_latency_seconds_sum{kubernetes_cluster_name=~\"$cluster\", namespace=~\"$namespace\", workload=~\"$workload\", node=~\"$node\"}[$__rate_interval])))",
           "instant": false,
           "legendFormat": "{{cause}}",
           "range": true,
@@ -1268,10 +1268,10 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
+        "type": "victoriametrics-metrics-datasource",
         "uid": "${datasource}"
       },
-      "description": "The throttled and idle share of the wait from the agent, against the share of CFS periods with throttle from cAdvisor. The agent does not export the cAdvisor series. If both throttle lines rise, the CPU limit of the workload causes the wait. cAdvisor has no workload label, so the query matches the pod names of each controller. A workload name with a last segment that looks like a hash, such as `web-7d9f8b`, can also match the pods of a shorter workload, such as `web`. Static pods do not match.",
+      "description": "The share of the run queue wait of the selected workloads with the cause `throttled` and with the cause `idle`, from the agent. A high throttled share means that the CPU limit of the workload causes the wait. A high idle share points to the wakeup path, not to a neighbour.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1335,31 +1335,6 @@
                 }
               }
             ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "throttled periods (cAdvisor)"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "#8C7B6B",
-                  "mode": "fixed"
-                }
-              },
-              {
-                "id": "custom.lineStyle",
-                "value": {
-                  "dash": [
-                    10,
-                    10
-                  ],
-                  "fill": "dash"
-                }
-              }
-            ]
           }
         ]
       },
@@ -1384,11 +1359,11 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
+            "type": "victoriametrics-metrics-datasource",
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum (rate(noisy_neighbour_runqueue_wait_by_cause_seconds_total{cluster=~\"$cluster\", namespace=~\"$namespace\", workload=~\"$workload\", node=~\"$node\", cause=\"throttled\"}[$__rate_interval])) / scalar(sum(rate(noisy_neighbour_runqueue_latency_seconds_sum{cluster=~\"$cluster\", namespace=~\"$namespace\", workload=~\"$workload\", node=~\"$node\"}[$__rate_interval])))",
+          "expr": "sum (rate(noisy_neighbour_runqueue_wait_by_cause_seconds_total{kubernetes_cluster_name=~\"$cluster\", namespace=~\"$namespace\", workload=~\"$workload\", node=~\"$node\", cause=\"throttled\"}[$__rate_interval])) / scalar(sum(rate(noisy_neighbour_runqueue_latency_seconds_sum{kubernetes_cluster_name=~\"$cluster\", namespace=~\"$namespace\", workload=~\"$workload\", node=~\"$node\"}[$__rate_interval])))",
           "instant": false,
           "legendFormat": "throttled share (agent)",
           "range": true,
@@ -1396,38 +1371,26 @@
         },
         {
           "datasource": {
-            "type": "prometheus",
+            "type": "victoriametrics-metrics-datasource",
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum (rate(noisy_neighbour_runqueue_wait_by_cause_seconds_total{cluster=~\"$cluster\", namespace=~\"$namespace\", workload=~\"$workload\", node=~\"$node\", cause=\"idle\"}[$__rate_interval])) / scalar(sum(rate(noisy_neighbour_runqueue_latency_seconds_sum{cluster=~\"$cluster\", namespace=~\"$namespace\", workload=~\"$workload\", node=~\"$node\"}[$__rate_interval])))",
+          "expr": "sum (rate(noisy_neighbour_runqueue_wait_by_cause_seconds_total{kubernetes_cluster_name=~\"$cluster\", namespace=~\"$namespace\", workload=~\"$workload\", node=~\"$node\", cause=\"idle\"}[$__rate_interval])) / scalar(sum(rate(noisy_neighbour_runqueue_latency_seconds_sum{kubernetes_cluster_name=~\"$cluster\", namespace=~\"$namespace\", workload=~\"$workload\", node=~\"$node\"}[$__rate_interval])))",
           "instant": false,
           "legendFormat": "idle share (agent)",
           "range": true,
           "refId": "B"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "editorMode": "code",
-          "expr": "sum(rate(container_cpu_cfs_throttled_periods_total{cluster=~\"$cluster\", namespace=~\"$namespace\", pod=~\"$workload(-[bcdfghjklmnpqrstvwxz2456789]{6,10}-[bcdfghjklmnpqrstvwxz2456789]{5}|-[bcdfghjklmnpqrstvwxz2456789]{5}|-[0-9]+|-[0-9]+-[bcdfghjklmnpqrstvwxz2456789]{5})?\", node=~\"$node\", container!=\"\"}[$__rate_interval])) / sum(rate(container_cpu_cfs_periods_total{cluster=~\"$cluster\", namespace=~\"$namespace\", pod=~\"$workload(-[bcdfghjklmnpqrstvwxz2456789]{6,10}-[bcdfghjklmnpqrstvwxz2456789]{5}|-[bcdfghjklmnpqrstvwxz2456789]{5}|-[0-9]+|-[0-9]+-[bcdfghjklmnpqrstvwxz2456789]{5})?\", node=~\"$node\", container!=\"\"}[$__rate_interval]))",
-          "instant": false,
-          "legendFormat": "throttled periods (cAdvisor)",
-          "range": true,
-          "refId": "C"
         }
       ],
-      "title": "Throttled and idle share against CFS throttle",
+      "title": "Throttled and idle share of the wait",
       "type": "timeseries"
     },
     {
       "datasource": {
-        "type": "prometheus",
+        "type": "victoriametrics-metrics-datasource",
         "uid": "${datasource}"
       },
-      "description": "The share of time in which at least one task on the node waited for CPU, from the PSI of node exporter. The agent does not export this series. Pressure on all nodes points to a lack of CPU, not to one neighbour.",
+      "description": "The share of time in which at least one task on the node waited for CPU, from the PSI of node exporter. The agent does not export this series. Pressure on all nodes points to a lack of CPU, not to one neighbour. It needs the pressure collector of node exporter.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1484,13 +1447,13 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
+            "type": "victoriametrics-metrics-datasource",
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "avg by (cluster, node) (rate(node_pressure_cpu_waiting_seconds_total{cluster=~\"$cluster\", node=~\"$node\"}[$__rate_interval]))",
+          "expr": "avg by (kubernetes_cluster_name, node) (rate(node_pressure_cpu_waiting_seconds_total{kubernetes_cluster_name=~\"$cluster\", node=~\"$node\"}[$__rate_interval]))",
           "instant": false,
-          "legendFormat": "{{cluster}}/{{node}}",
+          "legendFormat": "{{kubernetes_cluster_name}}/{{node}}",
           "range": true,
           "refId": "A"
         }
@@ -1500,7 +1463,7 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
+        "type": "victoriametrics-metrics-datasource",
         "uid": "${datasource}"
       },
       "description": "The p99 run queue wait of the selected workloads on the left axis, and the share of the wait with the cause `other_workload` on the right axis. If both rise together, a neighbour causes the wait.",
@@ -1610,11 +1573,11 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
+            "type": "victoriametrics-metrics-datasource",
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(noisy_neighbour_runqueue_latency_seconds_bucket{cluster=~\"$cluster\", namespace=~\"$namespace\", workload=~\"$workload\", node=~\"$node\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(noisy_neighbour_runqueue_latency_seconds_bucket{kubernetes_cluster_name=~\"$cluster\", namespace=~\"$namespace\", workload=~\"$workload\", node=~\"$node\"}[$__rate_interval])))",
           "instant": false,
           "legendFormat": "p99 wait",
           "range": true,
@@ -1622,11 +1585,11 @@
         },
         {
           "datasource": {
-            "type": "prometheus",
+            "type": "victoriametrics-metrics-datasource",
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum (rate(noisy_neighbour_runqueue_wait_by_cause_seconds_total{cluster=~\"$cluster\", namespace=~\"$namespace\", workload=~\"$workload\", node=~\"$node\", cause=\"other_workload\"}[$__rate_interval])) / scalar(sum(rate(noisy_neighbour_runqueue_latency_seconds_sum{cluster=~\"$cluster\", namespace=~\"$namespace\", workload=~\"$workload\", node=~\"$node\"}[$__rate_interval])))",
+          "expr": "sum (rate(noisy_neighbour_runqueue_wait_by_cause_seconds_total{kubernetes_cluster_name=~\"$cluster\", namespace=~\"$namespace\", workload=~\"$workload\", node=~\"$node\", cause=\"other_workload\"}[$__rate_interval])) / scalar(sum(rate(noisy_neighbour_runqueue_latency_seconds_sum{kubernetes_cluster_name=~\"$cluster\", namespace=~\"$namespace\", workload=~\"$workload\", node=~\"$node\"}[$__rate_interval])))",
           "instant": false,
           "legendFormat": "neighbour share",
           "range": true,
@@ -1646,7 +1609,7 @@
       },
       "id": 20,
       "options": {
-        "content": "Compare the panels of this row over the same time range.\n\n- **Neighbour:** the neighbour share rises with the p99 wait. **Who** names the culprit.\n- **Self:** the throttled share or the CFS throttle rises. The CPU limit of the workload is too low.\n- **Unclear:** neither rises. Look at the node pressure and the idle share. A high idle share points to the wakeup path, not to a neighbour.",
+        "content": "Compare the panels of this row over the same time range.\n\n- **Neighbour:** the neighbour share rises with the p99 wait. **Who** names the culprit.\n- **Self:** the throttled share rises. The CPU limit of the workload is too low.\n- **Unclear:** neither rises. Look at the node pressure and the idle share. A high idle share points to the wakeup path, not to a neighbour.",
         "mode": "markdown"
       },
       "title": "Verdict",
@@ -1667,7 +1630,7 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
+        "type": "victoriametrics-metrics-datasource",
         "uid": "${datasource}"
       },
       "description": "The per entity series of each agent as a share of its series budget. At 90%, the agent stops new culprit series. At 100%, new workloads go to `_overflow`.",
@@ -1735,13 +1698,13 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
+            "type": "victoriametrics-metrics-datasource",
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "max by (cluster, node) (noisy_neighbour_series{cluster=~\"$cluster\", node=~\"$node\"} / noisy_neighbour_series_budget{cluster=~\"$cluster\", node=~\"$node\"})",
+          "expr": "max by (kubernetes_cluster_name, node) (noisy_neighbour_series{kubernetes_cluster_name=~\"$cluster\", node=~\"$node\"} / noisy_neighbour_series_budget{kubernetes_cluster_name=~\"$cluster\", node=~\"$node\"})",
           "instant": false,
-          "legendFormat": "{{cluster}}/{{node}}",
+          "legendFormat": "{{kubernetes_cluster_name}}/{{node}}",
           "range": true,
           "refId": "A"
         }
@@ -1751,7 +1714,7 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
+        "type": "victoriametrics-metrics-datasource",
         "uid": "${datasource}"
       },
       "description": "The workloads in `_overflow` on each node, because they did not fit in the series budget. Their wait shows only under `_overflow`. The healthy value is 0.",
@@ -1810,13 +1773,13 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
+            "type": "victoriametrics-metrics-datasource",
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "max by (cluster, node) (noisy_neighbour_overflow_workloads{cluster=~\"$cluster\", node=~\"$node\"})",
+          "expr": "max by (kubernetes_cluster_name, node) (noisy_neighbour_overflow_workloads{kubernetes_cluster_name=~\"$cluster\", node=~\"$node\"})",
           "instant": false,
-          "legendFormat": "{{cluster}}/{{node}}",
+          "legendFormat": "{{kubernetes_cluster_name}}/{{node}}",
           "range": true,
           "refId": "A"
         }
@@ -1826,7 +1789,7 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
+        "type": "victoriametrics-metrics-datasource",
         "uid": "${datasource}"
       },
       "description": "The cgroups with samples that wait for the pod watch on each node. A value that stays above 0 means that the agent cannot name some pods.",
@@ -1885,13 +1848,13 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
+            "type": "victoriametrics-metrics-datasource",
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "max by (cluster, node) (noisy_neighbour_unresolved_cgroups{cluster=~\"$cluster\", node=~\"$node\"})",
+          "expr": "max by (kubernetes_cluster_name, node) (noisy_neighbour_unresolved_cgroups{kubernetes_cluster_name=~\"$cluster\", node=~\"$node\"})",
           "instant": false,
-          "legendFormat": "{{cluster}}/{{node}}",
+          "legendFormat": "{{kubernetes_cluster_name}}/{{node}}",
           "range": true,
           "refId": "A"
         }
@@ -1901,7 +1864,7 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
+        "type": "victoriametrics-metrics-datasource",
         "uid": "${datasource}"
       },
       "description": "Samples per second that the agent lost because a BPF map was full. `runq` is the cgroup map and `pairs` is the culprit pair map. The healthy value is 0.",
@@ -1960,13 +1923,13 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
+            "type": "victoriametrics-metrics-datasource",
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum by (cluster, node, map) (rate(noisy_neighbour_dropped_samples_total{cluster=~\"$cluster\", node=~\"$node\"}[$__rate_interval]))",
+          "expr": "sum by (kubernetes_cluster_name, node, map) (rate(noisy_neighbour_dropped_samples_total{kubernetes_cluster_name=~\"$cluster\", node=~\"$node\"}[$__rate_interval]))",
           "instant": false,
-          "legendFormat": "{{cluster}}/{{node}} {{map}}",
+          "legendFormat": "{{kubernetes_cluster_name}}/{{node}} {{map}}",
           "range": true,
           "refId": "A"
         }
@@ -1976,7 +1939,7 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
+        "type": "victoriametrics-metrics-datasource",
         "uid": "${datasource}"
       },
       "description": "The number of agents that run each version. More than one row means that a rollout is in progress or stuck.",
@@ -2003,11 +1966,11 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
+            "type": "victoriametrics-metrics-datasource",
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "count by (cluster, version, git_sha) (noisy_neighbour_build_info{cluster=~\"$cluster\", node=~\"$node\"})",
+          "expr": "count by (kubernetes_cluster_name, version, git_sha) (noisy_neighbour_build_info{kubernetes_cluster_name=~\"$cluster\", node=~\"$node\"})",
           "format": "table",
           "instant": true,
           "legendFormat": "__auto",
@@ -2042,16 +2005,16 @@
     "list": [
       {
         "current": {},
-        "description": "The Prometheus compatible datasource that scrapes the agents, such as VictoriaMetrics.",
+        "description": "The regional VictoriaMetrics datasource that holds the series of the agents. Select one region at a time.",
         "hide": 0,
         "includeAll": false,
         "label": "Data source",
         "multi": false,
         "name": "datasource",
         "options": [],
-        "query": "prometheus",
+        "query": "victoriametrics-metrics-datasource",
         "refresh": 1,
-        "regex": "",
+        "regex": "/^vm-cluster-/",
         "skipUrlSync": false,
         "type": "datasource"
       },
@@ -2066,11 +2029,11 @@
           ]
         },
         "datasource": {
-          "type": "prometheus",
+          "type": "victoriametrics-metrics-datasource",
           "uid": "${datasource}"
         },
-        "definition": "label_values(noisy_neighbour_runqueue_latency_seconds_count, cluster)",
-        "description": "The external `cluster` label of the scrape. All also matches series with no `cluster` label.",
+        "definition": "label_values(noisy_neighbour_runqueue_latency_seconds_count, kubernetes_cluster_name)",
+        "description": "The external `kubernetes_cluster_name` label of the scrape. All also matches series with no such label.",
         "hide": 0,
         "includeAll": true,
         "label": "Cluster",
@@ -2078,7 +2041,7 @@
         "name": "cluster",
         "options": [],
         "query": {
-          "query": "label_values(noisy_neighbour_runqueue_latency_seconds_count, cluster)",
+          "query": "label_values(noisy_neighbour_runqueue_latency_seconds_count, kubernetes_cluster_name)",
           "refId": "cluster"
         },
         "refresh": 2,
@@ -2097,10 +2060,10 @@
           ]
         },
         "datasource": {
-          "type": "prometheus",
+          "type": "victoriametrics-metrics-datasource",
           "uid": "${datasource}"
         },
-        "definition": "label_values(noisy_neighbour_runqueue_latency_seconds_count{cluster=~\"$cluster\"}, namespace)",
+        "definition": "label_values(noisy_neighbour_runqueue_latency_seconds_count{kubernetes_cluster_name=~\"$cluster\"}, namespace)",
         "description": "The namespace of the workload.",
         "hide": 0,
         "includeAll": true,
@@ -2109,7 +2072,7 @@
         "name": "namespace",
         "options": [],
         "query": {
-          "query": "label_values(noisy_neighbour_runqueue_latency_seconds_count{cluster=~\"$cluster\"}, namespace)",
+          "query": "label_values(noisy_neighbour_runqueue_latency_seconds_count{kubernetes_cluster_name=~\"$cluster\"}, namespace)",
           "refId": "namespace"
         },
         "refresh": 2,
@@ -2128,10 +2091,10 @@
           ]
         },
         "datasource": {
-          "type": "prometheus",
+          "type": "victoriametrics-metrics-datasource",
           "uid": "${datasource}"
         },
-        "definition": "label_values(noisy_neighbour_runqueue_latency_seconds_count{cluster=~\"$cluster\", namespace=~\"$namespace\"}, workload)",
+        "definition": "label_values(noisy_neighbour_runqueue_latency_seconds_count{kubernetes_cluster_name=~\"$cluster\", namespace=~\"$namespace\"}, workload)",
         "description": "The workload. Victim, Who and Rule out show the selected workloads.",
         "hide": 0,
         "includeAll": true,
@@ -2140,7 +2103,7 @@
         "name": "workload",
         "options": [],
         "query": {
-          "query": "label_values(noisy_neighbour_runqueue_latency_seconds_count{cluster=~\"$cluster\", namespace=~\"$namespace\"}, workload)",
+          "query": "label_values(noisy_neighbour_runqueue_latency_seconds_count{kubernetes_cluster_name=~\"$cluster\", namespace=~\"$namespace\"}, workload)",
           "refId": "workload"
         },
         "refresh": 2,
@@ -2159,10 +2122,10 @@
           ]
         },
         "datasource": {
-          "type": "prometheus",
+          "type": "victoriametrics-metrics-datasource",
           "uid": "${datasource}"
         },
-        "definition": "label_values(noisy_neighbour_runqueue_latency_seconds_count{cluster=~\"$cluster\", namespace=~\"$namespace\", workload=~\"$workload\"}, node)",
+        "definition": "label_values(noisy_neighbour_runqueue_latency_seconds_count{kubernetes_cluster_name=~\"$cluster\", namespace=~\"$namespace\", workload=~\"$workload\"}, node)",
         "description": "The node of the agent.",
         "hide": 0,
         "includeAll": true,
@@ -2171,7 +2134,7 @@
         "name": "node",
         "options": [],
         "query": {
-          "query": "label_values(noisy_neighbour_runqueue_latency_seconds_count{cluster=~\"$cluster\", namespace=~\"$namespace\", workload=~\"$workload\"}, node)",
+          "query": "label_values(noisy_neighbour_runqueue_latency_seconds_count{kubernetes_cluster_name=~\"$cluster\", namespace=~\"$namespace\", workload=~\"$workload\"}, node)",
           "refId": "node"
         },
         "refresh": 2,

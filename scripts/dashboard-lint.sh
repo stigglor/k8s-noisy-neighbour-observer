@@ -32,28 +32,6 @@ if ! jq -S . "$DASHBOARD" | diff -u "$DASHBOARD" - >/dev/null; then
     exit 1
 fi
 
-echo "==> the cAdvisor pod regex matches the pods of workload web and no other workload"
-pod_regex="$(jq -r '.panels[].targets[]?.expr | select(test("container_cpu_cfs")) | capture("pod=~\"(?<re>[^\"]+)\"").re' \
-    "$DASHBOARD" | head -1)"
-pod_regex="^${pod_regex//\$workload/web}\$"
-# Each line is "<want> <pod>": a Deployment, DaemonSet, StatefulSet, CronJob and bare Pod of web,
-# then pods of web-api, webapp and a Deployment web-api.
-while read -r want pod; do
-    got=no
-    grep -qE "$pod_regex" <<<"$pod" && got=yes
-    [ "$got" = "$want" ] || { echo "error: '$pod' match $got, want $want (regex $pod_regex)"; exit 1; }
-done <<'EOF'
-yes web-7d9f8b6c5d-x7k2p
-yes web-x7k2p
-yes web-0
-yes web-28471234-x7k2p
-yes web
-no web-api-0
-no web-api-x7k2p
-no webapp-x7k2p
-no web-api-7d9f8b6c5d-x7k2p
-EOF
-
 os="$(uname -s | tr '[:upper:]' '[:lower:]')"
 case "$(uname -m)" in
     x86_64 | amd64) arch=amd64 ;;

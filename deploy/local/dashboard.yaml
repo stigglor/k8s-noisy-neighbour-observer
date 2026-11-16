@@ -18,11 +18,8 @@ metadata:
   name: nno-dashboard-victoria-metrics
 rules:
   - apiGroups: [""]
-    resources: ["pods", "nodes"]
+    resources: ["pods"]
     verbs: ["get", "list", "watch"]
-  - apiGroups: [""]
-    resources: ["nodes/metrics"]
-    verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -47,7 +44,7 @@ data:
     global:
       scrape_interval: 15s
       external_labels:
-        cluster: nno-local
+        kubernetes_cluster_name: nno-local
     scrape_configs:
       - job_name: noisy-neighbour-observer
         honor_labels: true
@@ -60,20 +57,6 @@ data:
           - source_labels: [__meta_kubernetes_pod_node_name]
             target_label: node
           - source_labels: [__meta_kubernetes_pod_node_name]
-            target_label: instance
-      # cAdvisor in the kubelet, for the CFS throttle panel.
-      - job_name: cadvisor
-        scheme: https
-        metrics_path: /metrics/cadvisor
-        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
-        tls_config:
-          insecure_skip_verify: true
-        kubernetes_sd_configs:
-          - role: node
-        relabel_configs:
-          - source_labels: [__meta_kubernetes_node_name]
-            target_label: node
-          - source_labels: [__meta_kubernetes_node_name]
             target_label: instance
       - job_name: node-exporter
         kubernetes_sd_configs:
@@ -204,9 +187,9 @@ data:
   datasource.yaml: |
     apiVersion: 1
     datasources:
-      - name: VictoriaMetrics
+      - name: vm-cluster-kind
         uid: victoria-metrics
-        type: prometheus
+        type: victoriametrics-metrics-datasource
         access: proxy
         url: http://victoria-metrics:8428
         isDefault: true
@@ -245,6 +228,9 @@ spec:
               value: "true"
             - name: GF_AUTH_ANONYMOUS_ORG_ROLE
               value: Viewer
+            # Grafana installs the signed plugin from grafana.com before it provisions the datasource.
+            - name: GF_PLUGINS_PREINSTALL_SYNC
+              value: victoriametrics-metrics-datasource@1.0.1
             - name: GF_ANALYTICS_REPORTING_ENABLED
               value: "false"
             - name: GF_ANALYTICS_CHECK_FOR_UPDATES
