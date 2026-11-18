@@ -29,7 +29,7 @@ jobs:
         run: make ebpf-toolchain
 
       - name: Cache cargo registry and target
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
 
       - name: make ci
         run: make ci
@@ -55,7 +55,7 @@ jobs:
         run: make ebpf-toolchain
 
       - name: Cache cargo registry and target
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
 
       - name: make integration
         run: make integration
@@ -81,7 +81,7 @@ jobs:
         run: make ebpf-toolchain
 
       - name: Cache cargo registry and target
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
 
       # The VM mounts the checkout at /host, so the test binary goes there.
       - name: Build the integration test
